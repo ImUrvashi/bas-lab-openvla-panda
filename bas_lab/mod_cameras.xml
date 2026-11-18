@@ -1,0 +1,14 @@
+<mujoco model="bas_cameras_lights">
+  <!-- Cameras are fixed in the world frame. policy_cam == the camera of the data/evaluation scripts (free camera, fovy 45). -->
+  <worldbody>
+    <camera name="policy_cam" pos="1.6074 -1.0574 1.1273" xyaxes="0.7071 0.7071 -0 -0.2988 0.2988 0.9063" fovy="45"/>
+    <camera name="overview_cam" pos="0.55 -3.1 1.4" xyaxes="1 -0 0 0 0.2425 0.9701" fovy="70"/>
+    <camera name="bench_cam" pos="1.5 0 1" xyaxes="0 1 -0 -0.534 0 0.8455" fovy="50"/>
+    <camera name="end_cam" pos="0.55 3.1 1.2" xyaxes="-1 -0 0 0 -0.0303 0.9995" fovy="70"/>
+    <camera name="aisle_cam" pos="0.55 0 0.9" xyaxes="1 0 0 0 0 1" fovy="75"/>
+    <!-- ceiling work lights -->
+    <light name="lamp_a" pos="0.55 -1.4 2.2" dir="0 0.25 -1" cutoff="80" exponent="1" diffuse="0.50 0.50 0.53" castshadow="true"/>
+    <light name="lamp_b" pos="0.55 0.4 2.2" dir="0 0 -1" cutoff="80" exponent="1" diffuse="0.55 0.55 0.57" castshadow="true"/>
+    <light name="lamp_c" pos="0.55 2.2 2.2" dir="0 -0.2 -1" cutoff="80" exponent="1" diffuse="0.40 0.40 0.44" castshadow="false"/>
+  </worldbody>
+</mujoco>

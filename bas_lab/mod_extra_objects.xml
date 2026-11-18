@@ -1,0 +1,13 @@
+<mujoco model="bas_extra_objects">
+  <!-- Optional extra objects: sample canister and a small blue box on the bench (resting on the velcro surface). -->
+  <worldbody>
+    <body name="sample_canister" pos="0.30 0.33 0.415">
+      <joint name="canister_free" type="free" damping="0.01"/>
+      <geom name="canister_geom" type="cylinder" size="0.022 0.04" mass="0.06" rgba="0.15 0.55 0.65 1" friction="1.5 0.02 0.002" margin="0.003" gap="0.003"/>
+    </body>
+    <body name="tool_box" pos="0.82 -0.33 0.39">
+      <joint name="toolbox_free" type="free" damping="0.01"/>
+      <geom name="toolbox_geom" type="box" size="0.03 0.02 0.015" mass="0.05" rgba="0.2 0.3 0.8 1" friction="1.5 0.02 0.002" margin="0.003" gap="0.003"/>
+    </body>
+  </worldbody>
+</mujoco>
