@@ -6,4 +6,3 @@ demonstrations*/
 panda_openvla_data*/
 *.npz
 *.npy
-*.safetensors

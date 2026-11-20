@@ -2,7 +2,7 @@
 
 Code from an M.Tech project: a **Franka Panda** in a simulated **microgravity space-station lab (BAS lab)** picks up a red cube and places it on a yellow marker, controlled by **OpenVLA-7B** (4-bit, LoRA fine-tuned) from **one camera image + one fixed sentence**. Shared so the environment and the model interface can be understood and reproduced (e.g. in another simulator).
 
-**Not included:** model weights (LoRA adapters), recorded demonstrations, training datasets.
+**Included:** the LoRA weights of the best lab model (`weights/side_v12_step2500/`, Git LFS, see section 7). **Not included:** recorded demonstrations, training datasets.
 
 ## 1. Setup
 - Python 3.11, `pip install mujoco numpy pillow` — enough for the scene, the scripted expert and the simulator side.
@@ -66,3 +66,14 @@ Headline (simulation, one run per layout): with the default far camera the lab m
 | `interactive_panda.py` | live MuJoCo window, type commands, the model drives the arm |
 | `build_bas_lab.py`, `build_station_scene.py`, `view_station.py` | build / view the scenes |
 | `bas_lab/`, `mujoco_menagerie/franka_emika_panda/` | scene files and Panda model |
+| `weights/side_v12_step2500/` | LoRA adapter of the best lab model + its normalization statistics (section 7) |
+
+## 7. Model weights (`weights/side_v12_step2500/`, Git LFS)
+- **What:** LoRA adapter (rank 32, alpha 16, all linear layers, 443 MB, fp32) for the base model **`openvla/openvla-7b`** (downloaded from Hugging Face; not included). Checkpoint `side_v12`, step 2500: fine-tuned on ~220 BAS-lab expert episodes rendered with the **side camera**, resumed from earlier table + lab rounds. This is the model behind the 12/12 + 12/12 lab result.
+- **Files:** `lora_adapter/adapter_model.safetensors`, `lora_adapter/adapter_config.json`, `dataset_statistics.json` (action un-normalization, key `panda_pilot`; same as `model_stats/side_v12/`).
+- **Download:** install Git LFS (`git lfs install`) before cloning; in an existing clone run `git lfs pull`. Without LFS the `.safetensors` file is only a small text pointer.
+- **Use:** it only works with the same inputs it was trained on — BAS lab, side camera (section 3), 320×240 render squashed to 224×224, the fixed instruction, 4-bit base model. Serve it with
+  ```bash
+  python policy_server.py --adapter_dir weights/side_v12_step2500/lora_adapter --stats weights/side_v12_step2500/dataset_statistics.json
+  ```
+  (needs a GPU with ≈ 9 GB free and the OpenVLA repo, section 1), then run `closed_loop_panda.py --policy server --scene bas --camera side …`. In another simulator (different rendering) expect it to need fine-tuning on that simulator's images first.
