@@ -1,11 +1,12 @@
 """Convert a 7D end-effector policy action into bounded Panda joint targets.
 
-This is a one-request-at-a-time bridge for the Unreal prototype, not a 10 Hz
-controller. The default sample mode uses a fixed 3 cm hand delta and does not
-load OpenVLA. Later, --upstream-url can forward observations to policy_server.py.
+Unreal's bridge calls POST /act once per 0.1 s policy step. Where the 7-D action comes from:
+  sample    fixed 3 cm hand delta (connection test)
+  expert    expert_policy.py on the true cube/marker state Unreal sends (no model)
+  upstream  OpenVLA policy_server.py, e.g. on the GPU server through an SSH tunnel
 
-    .venv/bin/python policy_ik_gateway.py --port 8000
-    .venv/bin/python policy_ik_gateway.py --port 8000 --upstream-url http://127.0.0.1:8001/act
+    .venv/bin/python policy_ik_gateway.py --policy expert
+    .venv/bin/python policy_ik_gateway.py --upstream-url http://127.0.0.1:8001/act
 """
 
 import argparse
@@ -21,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 
+from expert_policy import ExpertPolicy
 from openvla_adapter import PandaKinematics, decode_action
 
 
@@ -61,6 +63,23 @@ def validate_request(request):
     return joints, float(opening)
 
 
+def expert_action(handler, request, joints, opening):
+    """Run expert_policy.ExpertPolicy on the privileged state; one expert per episode."""
+    cube = finite_vector(request.get("cube_pos"), 3, "cube_pos")
+    marker = finite_vector(request.get("marker_xy"), 2, "marker_xy")
+    episode, step = request.get("episode"), request.get("step")
+    if not isinstance(episode, int) or not isinstance(step, int):
+        raise ValueError("expert mode needs integer episode and step")
+    hand, R_hand = handler.kin.fk(joints)
+    if step == 0 or handler.expert is None or handler.expert_episode != episode:
+        handler.expert = ExpertPolicy(marker, R_hand)    # reset pose defines the nominal rotation
+        handler.expert_episode = episode
+    action, phase = handler.expert.act(hand, cube, opening, R_hand, step)
+    if phase == "DONE":
+        action = np.r_[np.zeros(6), 1.0]
+    return action.tolist(), phase
+
+
 def convert_action(kin, joints, opening, action):
     action = finite_vector(action, 7, "action").copy()
     distance = np.linalg.norm(action[:3])
@@ -79,8 +98,14 @@ def convert_action(kin, joints, opening, action):
 class GatewayHandler(BaseHTTPRequestHandler):
     kin = None
     upstream_url = None
+    policy = "sample"
+    expert = None
+    expert_episode = None
     requests = 0
     lock = threading.Lock()
+
+    def log_message(self, *args):
+        pass    # one access line per 10 Hz step is noise; progress is printed below
 
     def send_json(self, code, value):
         body = json.dumps(value, allow_nan=False).encode("utf-8")
@@ -92,7 +117,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in ("/", "/health"):
-            return self.send_json(200, {"ok": True, "mode": "upstream" if self.upstream_url else "sample",
+            return self.send_json(200, {"ok": True, "mode": "upstream" if self.upstream_url else self.policy,
                                          "requests": self.requests})
         self.send_json(404, {"error": "not found"})
 
@@ -109,6 +134,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return self.send_json(400, {"error": str(exc)})
 
         start = time.monotonic()
+        phase = ""
         try:
             if self.upstream_url:
                 upstream_request = urllib.request.Request(
@@ -118,14 +144,18 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 )
                 with urllib.request.urlopen(upstream_request, timeout=30) as response:
                     action = json.load(response)["action"]
-            else:
-                action = SAMPLE_ACTION
             with self.lock:
+                if not self.upstream_url and self.policy == "expert":
+                    action, phase = expert_action(type(self), request, joints, opening)
+                elif not self.upstream_url:
+                    action = SAMPLE_ACTION
                 safe_action, targets, residual = convert_action(self.kin, joints, opening, action)
                 type(self).requests += 1
-            print(f"request {self.requests}: IK residual {residual:.6f} m", flush=True)
+            if self.requests % 25 == 1 or self.policy == "sample":
+                print(f"request {self.requests}: step {request.get('step')} {phase} "
+                      f"IK residual {residual:.6f} m", flush=True)
             self.send_json(200, {"action": safe_action, "joint_targets": targets,
-                                 "ik_residual_m": residual,
+                                 "ik_residual_m": residual, "phase": phase,
                                  "latency_s": round(time.monotonic() - start, 3)})
         except (ValueError, KeyError, TypeError, urllib.error.URLError) as exc:
             self.send_json(502, {"error": str(exc)})
@@ -134,13 +164,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--upstream-url", help="OpenVLA POST /act endpoint; omit for fixed sample action")
+    parser.add_argument("--policy", choices=("sample", "expert"), default="sample",
+                        help="local action source when --upstream-url is not given")
+    parser.add_argument("--upstream-url", help="OpenVLA POST /act endpoint (overrides --policy)")
     args = parser.parse_args()
     GatewayHandler.kin = PandaKinematics()
     GatewayHandler.upstream_url = args.upstream_url
+    GatewayHandler.policy = args.policy
     server = ThreadingHTTPServer(("127.0.0.1", args.port), GatewayHandler)
     print(f"IK_GATEWAY_READY http://127.0.0.1:{args.port} mode="
-          f"{'upstream' if args.upstream_url else 'sample'}", flush=True)
+          f"{'upstream' if args.upstream_url else args.policy}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
