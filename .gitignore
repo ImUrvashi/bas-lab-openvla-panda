@@ -6,3 +6,13 @@ demonstrations*/
 panda_openvla_data*/
 *.npz
 *.npy
+doc/
+
+# Unreal Engine generated files (keep .uproject, Config, Content and Source)
+unreal/**/Binaries/
+unreal/**/Intermediate/
+unreal/**/Saved/
+unreal/**/DerivedDataCache/
+unreal/**/*.xcworkspace/
+unreal/exported/
+.DS_Store
