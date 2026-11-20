@@ -249,6 +249,18 @@ void APandaRobotActor::ApplyJointPose()
     MotionFrames[RightFingerIndex]->SetRelativeLocation(FingerOffset);
 }
 
+void APandaRobotActor::SetFingerStopCm(float StopCm)
+{
+    FingerStopCm = FMath::Clamp(StopCm, 0.0f, 4.0f);
+    // Apply at once: at low frame rates the fingers can pass the stop within a single tick.
+    CommandFingerTargetCm = FMath::Max(CommandFingerTargetCm, FingerStopCm);
+    if (FingerOpeningCm < FingerStopCm)
+    {
+        FingerOpeningCm = FingerStopCm;
+        ApplyJointPose();
+    }
+}
+
 void APandaRobotActor::ResetHome()
 {
     bCommandActive = false;

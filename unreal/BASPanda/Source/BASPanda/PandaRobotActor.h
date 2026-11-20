@@ -54,7 +54,7 @@ public:
     float GetGripperOpenness() const { return FingerOpeningCm / 4.0f; }
 
     /** Fingers cannot close below this (set while holding an object); 0 = no stop. */
-    void SetFingerStopCm(float StopCm) { FingerStopCm = FMath::Clamp(StopCm, 0.0f, 4.0f); }
+    void SetFingerStopCm(float StopCm);
     float GetFingerStopCm() const { return FingerStopCm; }
 
     /** Approximate centre between the fingertip pads, in world coordinates. */
