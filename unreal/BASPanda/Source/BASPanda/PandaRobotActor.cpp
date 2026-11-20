@@ -123,16 +123,18 @@ void APandaRobotActor::Tick(float DeltaSeconds)
     bool bAtTarget = true;
     for (int32 Joint = 0; Joint < NumArmJoints; ++Joint)
     {
-        ArmJointsRad[Joint] = FMath::FInterpConstantTo(ArmJointsRad[Joint], CommandTargetsRad[Joint], DeltaSeconds, 0.5f);
+        ArmJointsRad[Joint] = FMath::FInterpConstantTo(ArmJointsRad[Joint], CommandTargetsRad[Joint], DeltaSeconds,
+            CommandJointSpeeds.IsValidIndex(Joint) ? CommandJointSpeeds[Joint] : 0.5f);
         bAtTarget &= FMath::IsNearlyEqual(ArmJointsRad[Joint], CommandTargetsRad[Joint], 0.001f);
     }
-    FingerOpeningCm = FMath::FInterpConstantTo(FingerOpeningCm, CommandFingerTargetCm, DeltaSeconds, 4.0f);
+    CommandFingerTargetCm = FMath::Max(CommandFingerTargetCm, FingerStopCm);
+    FingerOpeningCm = FMath::FInterpConstantTo(FingerOpeningCm, CommandFingerTargetCm, DeltaSeconds, CommandFingerSpeed);
     bAtTarget &= FMath::IsNearlyEqual(FingerOpeningCm, CommandFingerTargetCm, 0.001f);
     ApplyJointPose();
     bCommandActive = !bAtTarget;
 }
 
-bool APandaRobotActor::CommandJointTargets(const TArray<float>& JointTargetsRad, float GripperOpenness)
+bool APandaRobotActor::CommandJointTargets(const TArray<float>& JointTargetsRad, float GripperOpenness, float DurationSec)
 {
     if (!HasActorBegunPlay() || bMotionTestActive || ArmJointsRad.Num() != NumArmJoints ||
         JointTargetsRad.Num() != NumArmJoints || !FMath::IsFinite(GripperOpenness))
@@ -149,7 +151,17 @@ bool APandaRobotActor::CommandJointTargets(const TArray<float>& JointTargetsRad,
         const float SafeTarget = FMath::Clamp(JointTargetsRad[Joint], JointLower[Joint], JointUpper[Joint]);
         CommandTargetsRad[Joint] = FMath::Clamp(SafeTarget, ArmJointsRad[Joint] - 0.15f, ArmJointsRad[Joint] + 0.15f);
     }
-    CommandFingerTargetCm = 4.0f * FMath::Clamp(GripperOpenness, 0.0f, 1.0f);
+    CommandFingerTargetCm = FMath::Max(4.0f * FMath::Clamp(GripperOpenness, 0.0f, 1.0f), FingerStopCm);
+
+    // Timed step: every joint arrives together after DurationSec. Otherwise the 0.5 rad/s preview speed.
+    CommandJointSpeeds.SetNum(NumArmJoints);
+    for (int32 Joint = 0; Joint < NumArmJoints; ++Joint)
+    {
+        CommandJointSpeeds[Joint] = DurationSec > 0.0f ?
+            FMath::Max(FMath::Abs(CommandTargetsRad[Joint] - ArmJointsRad[Joint]) / DurationSec, 1e-3f) : 0.5f;
+    }
+    CommandFingerSpeed = DurationSec > 0.0f ?
+        FMath::Max(FMath::Abs(CommandFingerTargetCm - FingerOpeningCm) / DurationSec, 1e-3f) : 4.0f;
     bCommandActive = true;
     return true;
 }
@@ -240,6 +252,7 @@ void APandaRobotActor::ApplyJointPose()
 void APandaRobotActor::ResetHome()
 {
     bCommandActive = false;
+    FingerStopCm = 0.0f;
     ArmJointsRad = {0.0f, 0.0f, 0.0f, -1.57079f, 0.0f, 1.57079f, -0.7853f};
     FingerOpeningCm = 4.0f;
     ApplyJointPose();

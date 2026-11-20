@@ -34,6 +34,12 @@ namespace
         {TEXT("Release cube"), {0, 0.12363692f, 0, -1.74907139f, 0, 1.87270772f, -0.7853f}, 1.0f, true},
     };
 
+    // MuJoCo metres (y left) -> Unreal centimetres (y right): the one place this flip happens.
+    FVector MujocoToUnrealCm(const FVector& Metres)
+    {
+        return FVector(Metres.X, -Metres.Y, Metres.Z) * 100.0;
+    }
+
     // Engine/BasicShapes/Cube is 100 cm on each side. Source sizes below are
     // half-extents in metres from bas_lab/mod_workstation.xml.
     void ConfigureBox(UStaticMeshComponent* Part, UStaticMesh* CubeMesh,
@@ -190,7 +196,7 @@ void ABASWorkcellActor::AdvanceScriptedTest(float DeltaSeconds)
         bPoseReached &= FMath::IsNearlyEqual(PandaRobot->ArmJointsRad[Joint], Pose.Joints[Joint], 0.005f);
     }
     bPoseReached &= FMath::IsNearlyEqual(PandaRobot->FingerOpeningCm,
-        4.0f * Pose.GripperOpenness, 0.05f);
+        FMath::Max(4.0f * Pose.GripperOpenness, PandaRobot->GetFingerStopCm()), 0.05f);
     if (ScriptedPhase == 2)
     {
         bPoseReached &= bCubeHeld;
@@ -233,6 +239,8 @@ void ABASWorkcellActor::GraspCube()
     {
         PickCube->SetWorldLocation(Frame->GetComponentLocation());
         bCubeHeld = true;
+        // Fingers stop on the 5 cm cube (2.5 cm each), so openness reads ~0.62 as in MuJoCo.
+        PandaRobot->SetFingerStopCm(2.5f);
     }
     else
     {
@@ -257,6 +265,10 @@ void ABASWorkcellActor::ReleaseCube()
     PickCube->SetPhysicsLinearVelocity(FVector::ZeroVector);
     PickCube->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
     bCubeHeld = false;
+    if (PandaRobot)
+    {
+        PandaRobot->SetFingerStopCm(0.0f);
+    }
 }
 
 void ABASWorkcellActor::ResetCube()
@@ -270,7 +282,8 @@ void ABASWorkcellActor::ResetCube()
     {
         PickCube->SetSimulatePhysics(false);
     }
-    PickCube->SetRelativeLocationAndRotation(FVector(45.0, 0.0, 40.0), FRotator::ZeroRotator);
+    PickCube->SetRelativeLocationAndRotation(MujocoToUnrealCm(FVector(CubeStartXY.X, CubeStartXY.Y, 0.40)),
+        FRotator::ZeroRotator);
     if (bResumePhysics)
     {
         PickCube->SetSimulatePhysics(true);
@@ -278,6 +291,28 @@ void ABASWorkcellActor::ResetCube()
         PickCube->SetPhysicsLinearVelocity(FVector::ZeroVector);
         PickCube->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
     }
+}
+
+void ABASWorkcellActor::ResetTask()
+{
+    TargetMarker->SetRelativeLocation(MujocoToUnrealCm(FVector(MarkerXY.X, MarkerXY.Y, 0.3765)));
+    ResetCube();
+}
+
+void ABASWorkcellActor::RandomizeLayout(FRandomStream& Stream)
+{
+    // Ranges from README / closed_loop_panda: cube x 0.40-0.49, y +-0.10; marker x 0.57-0.66, y +-0.20.
+    do
+    {
+        CubeStartXY = FVector2D(Stream.FRandRange(0.40, 0.49), Stream.FRandRange(-0.10, 0.10));
+        MarkerXY = FVector2D(Stream.FRandRange(0.57, 0.66), Stream.FRandRange(-0.20, 0.20));
+    } while (FVector2D::Distance(CubeStartXY, MarkerXY) < 0.13);
+}
+
+FVector ABASWorkcellActor::GetCubePositionMujoco() const
+{
+    const FVector Cm = WorkcellRoot->GetComponentTransform().InverseTransformPosition(PickCube->GetComponentLocation());
+    return FVector(Cm.X, -Cm.Y, Cm.Z) / 100.0;
 }
 
 bool ABASWorkcellActor::IsCubePlaced() const
@@ -293,6 +328,8 @@ bool ABASWorkcellActor::IsCubePlaced() const
 void ABASWorkcellActor::OnConstruction(const FTransform& Transform)
 {
     Super::OnConstruction(Transform);
+    TargetMarker->SetRelativeLocation(MujocoToUnrealCm(FVector(MarkerXY.X, MarkerXY.Y, 0.3765)));
+    PickCube->SetRelativeLocation(MujocoToUnrealCm(FVector(CubeStartXY.X, CubeStartXY.Y, 0.40)));
     UMaterialInterface* BaseMaterial = LoadObject<UMaterialInterface>(
         nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
     if (!BaseMaterial)

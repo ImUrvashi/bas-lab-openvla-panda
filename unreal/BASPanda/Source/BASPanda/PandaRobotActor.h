@@ -45,8 +45,17 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Panda")
     void ApplyJointPose();
 
-    /** Accept one bounded absolute joint target from the local policy bridge. Runtime only. */
-    bool CommandJointTargets(const TArray<float>& JointTargetsRad, float GripperOpenness);
+    /** Accept one bounded absolute joint target. DurationSec > 0 reaches it in that time (one policy step). */
+    bool CommandJointTargets(const TArray<float>& JointTargetsRad, float GripperOpenness, float DurationSec = 0.0f);
+
+    bool IsCommandActive() const { return bCommandActive; }
+
+    /** Measured gripper openness, 0 closed .. 1 open (as MuJoCo's grip_obs). */
+    float GetGripperOpenness() const { return FingerOpeningCm / 4.0f; }
+
+    /** Fingers cannot close below this (set while holding an object); 0 = no stop. */
+    void SetFingerStopCm(float StopCm) { FingerStopCm = FMath::Clamp(StopCm, 0.0f, 4.0f); }
+    float GetFingerStopCm() const { return FingerStopCm; }
 
     /** Approximate centre between the fingertip pads, in world coordinates. */
     UFUNCTION(BlueprintPure, Category = "Panda")
@@ -70,4 +79,7 @@ private:
     TArray<float> CommandTargetsRad;
     float CommandFingerTargetCm = 4.0f;
     bool bCommandActive = false;
+    TArray<float> CommandJointSpeeds;
+    float CommandFingerSpeed = 4.0f;
+    float FingerStopCm = 0.0f;
 };

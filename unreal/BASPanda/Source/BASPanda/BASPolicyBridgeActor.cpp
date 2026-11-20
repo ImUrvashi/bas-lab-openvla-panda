@@ -1,6 +1,7 @@
 #include "BASPolicyBridgeActor.h"
 
 #include "BASPolicyCameraActor.h"
+#include "BASWorkcellActor.h"
 #include "PandaRobotActor.h"
 #include "Dom/JsonObject.h"
 #include "HttpModule.h"
@@ -10,29 +11,153 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 
+namespace
+{
+    // closed_loop_panda.py: success once the released cube stays on the marker for 10 policy steps.
+    constexpr int32 SuccessHoldSteps = 10;
+    constexpr float ReleasedOpenness = 0.8f;
+
+    TArray<TSharedPtr<FJsonValue>> JsonNumbers(std::initializer_list<double> Values)
+    {
+        TArray<TSharedPtr<FJsonValue>> Out;
+        for (const double Value : Values)
+        {
+            Out.Add(MakeShared<FJsonValueNumber>(Value));
+        }
+        return Out;
+    }
+}
+
 ABASPolicyBridgeActor::ABASPolicyBridgeActor()
 {
-    PrimaryActorTick.bCanEverTick = false;
+    PrimaryActorTick.bCanEverTick = true;
 }
 
 void ABASPolicyBridgeActor::BeginPlay()
 {
     Super::BeginPlay();
-    if (bSendOnBeginPlay)
+    if (bRunClosedLoopOnBeginPlay)
+    {
+        StartClosedLoop();
+    }
+    else if (bSendOnBeginPlay)
     {
         SendTestObservation();
     }
 }
 
+bool ABASPolicyBridgeActor::FindActors()
+{
+    if (!Panda)
+    {
+        Panda = Cast<APandaRobotActor>(UGameplayStatics::GetActorOfClass(this, APandaRobotActor::StaticClass()));
+    }
+    if (!Workcell)
+    {
+        Workcell = Cast<ABASWorkcellActor>(UGameplayStatics::GetActorOfClass(this, ABASWorkcellActor::StaticClass()));
+    }
+    return Panda && Workcell;
+}
+
 void ABASPolicyBridgeActor::SendTestObservation()
+{
+    FindActors();
+    SendObservation();
+}
+
+void ABASPolicyBridgeActor::StartClosedLoop()
+{
+    if (!FindActors())
+    {
+        LoopStatus = TEXT("Failed: level needs PandaRobotActor and BASWorkcellActor");
+        UE_LOG(LogTemp, Error, TEXT("BAS loop: %s"), *LoopStatus);
+        return;
+    }
+    LayoutStream.Initialize(LayoutSeed);
+    Episode = 0;
+    Successes = 0;
+    LatencySum = 0.0;
+    TotalRequests = 0;
+    bLoopActive = true;
+    StartEpisode();
+}
+
+void ABASPolicyBridgeActor::StopClosedLoop(const FString& Reason)
+{
+    bLoopActive = false;
+    LoopStatus = Reason;
+    UE_LOG(LogTemp, Display, TEXT("BAS loop: %s"), *LoopStatus);
+}
+
+void ABASPolicyBridgeActor::StartEpisode()
+{
+    if (bRandomizeLayout)
+    {
+        Workcell->RandomizeLayout(LayoutStream);
+    }
+    Workcell->ResetTask();
+    Panda->ResetHome();
+    Step = 0;
+    SuccessStreak = 0;
+    LoopStatus = FString::Printf(TEXT("Episode %d/%d running"), Episode + 1, NumEpisodes);
+    UE_LOG(LogTemp, Display, TEXT("BAS loop: episode %d start, cube (%.3f, %.3f) marker (%.3f, %.3f)"),
+        Episode + 1, Workcell->CubeStartXY.X, Workcell->CubeStartXY.Y, Workcell->MarkerXY.X, Workcell->MarkerXY.Y);
+}
+
+void ABASPolicyBridgeActor::EndEpisode(bool bSuccess, const FString& Why)
+{
+    Successes += bSuccess ? 1 : 0;
+    UE_LOG(LogTemp, Display, TEXT("BAS loop: episode %d %s (%s) after %d steps"),
+        Episode + 1, bSuccess ? TEXT("SUCCESS") : TEXT("FAILED"), *Why, Step);
+    ++Episode;
+    if (Episode < NumEpisodes)
+    {
+        StartEpisode();
+        return;
+    }
+    StopClosedLoop(FString::Printf(TEXT("Done: %d/%d successful"), Successes, NumEpisodes));
+    UE_LOG(LogTemp, Display, TEXT("BAS loop: mean request latency %.0f ms"),
+        1000.0 * LatencySum / FMath::Max(1, TotalRequests));
+}
+
+void ABASPolicyBridgeActor::Tick(float DeltaSeconds)
+{
+    Super::Tick(DeltaSeconds);
+    // Next step only once the previous action has been fully executed and answered.
+    if (!bLoopActive || bRequestInFlight || !Panda || Panda->IsCommandActive())
+    {
+        return;
+    }
+    if (Step > 0)
+    {
+        const bool bReleasedOnMarker = Workcell->IsCubePlaced() && Panda->GetGripperOpenness() > ReleasedOpenness;
+        SuccessStreak = bReleasedOnMarker ? SuccessStreak + 1 : 0;
+        if (SuccessStreak >= SuccessHoldSteps)
+        {
+            EndEpisode(true, TEXT("cube released on marker"));
+            return;
+        }
+    }
+    if (Step >= MaxSteps)
+    {
+        EndEpisode(false, TEXT("max steps"));
+        return;
+    }
+    if (!SendObservation())
+    {
+        StopClosedLoop(TEXT("Stopped: ") + LastResult);
+    }
+}
+
+bool ABASPolicyBridgeActor::SendObservation()
 {
     ABASPolicyCameraActor* Camera = Cast<ABASPolicyCameraActor>(
         UGameplayStatics::GetActorOfClass(this, ABASPolicyCameraActor::StaticClass()));
     if (!Camera)
     {
         LastResult = TEXT("No BASPolicyCameraActor in this level");
-        UE_LOG(LogTemp, Error, TEXT("BAS policy test: %s"), *LastResult);
-        return;
+        UE_LOG(LogTemp, Error, TEXT("BAS policy: %s"), *LastResult);
+        return false;
     }
 
     TArray<uint8> RGB;
@@ -40,21 +165,14 @@ void ABASPolicyBridgeActor::SendTestObservation()
     if (!Camera->CaptureRGB(RGB, Error))
     {
         LastResult = Error;
-        UE_LOG(LogTemp, Error, TEXT("BAS policy test: %s"), *LastResult);
-        return;
+        UE_LOG(LogTemp, Error, TEXT("BAS policy: %s"), *LastResult);
+        return false;
     }
 
     TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
     Payload->SetStringField(TEXT("instruction"), Instruction);
     Payload->SetStringField(TEXT("image_b64"), FBase64::Encode(RGB.GetData(), RGB.Num()));
-    TArray<TSharedPtr<FJsonValue>> Shape;
-    for (const int32 Dimension : {224, 224, 3})
-    {
-        Shape.Add(MakeShared<FJsonValueNumber>(Dimension));
-    }
-    Payload->SetArrayField(TEXT("shape"), Shape);
-    APandaRobotActor* Panda = Cast<APandaRobotActor>(
-        UGameplayStatics::GetActorOfClass(this, APandaRobotActor::StaticClass()));
+    Payload->SetArrayField(TEXT("shape"), JsonNumbers({224, 224, 3}));
     if (Panda && Panda->ArmJointsRad.Num() == 7)
     {
         TArray<TSharedPtr<FJsonValue>> Joints;
@@ -63,8 +181,18 @@ void ABASPolicyBridgeActor::SendTestObservation()
             Joints.Add(MakeShared<FJsonValueNumber>(Angle));
         }
         Payload->SetArrayField(TEXT("joints_rad"), Joints);
-        Payload->SetNumberField(TEXT("gripper_opening"), FMath::Clamp(Panda->FingerOpeningCm / 4.0f, 0.0f, 1.0f));
+        Payload->SetNumberField(TEXT("gripper_opening"), FMath::Clamp(Panda->GetGripperOpenness(), 0.0f, 1.0f));
     }
+    // Privileged task state for the scripted expert and for logging; OpenVLA never sees it.
+    if (Workcell)
+    {
+        const FVector Cube = Workcell->GetCubePositionMujoco();
+        Payload->SetArrayField(TEXT("cube_pos"), JsonNumbers({Cube.X, Cube.Y, Cube.Z}));
+        Payload->SetArrayField(TEXT("marker_xy"), JsonNumbers({Workcell->MarkerXY.X, Workcell->MarkerXY.Y}));
+    }
+    Payload->SetNumberField(TEXT("episode"), Episode);
+    Payload->SetNumberField(TEXT("step"), Step);
+
     FString JsonBody;
     const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&JsonBody);
     FJsonSerializer::Serialize(Payload, Writer);
@@ -74,76 +202,93 @@ void ABASPolicyBridgeActor::SendTestObservation()
     Request->SetVerb(TEXT("POST"));
     Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
     Request->SetContentAsString(JsonBody);
-    Request->SetTimeout(10.0f);
+    Request->SetTimeout(30.0f);
     Request->OnProcessRequestComplete().BindUObject(this, &ABASPolicyBridgeActor::HandleResponse);
     LastResult = FString::Printf(TEXT("Sending %d RGB bytes"), RGB.Num());
     if (!Request->ProcessRequest())
     {
         LastResult = TEXT("Could not start HTTP request");
-        UE_LOG(LogTemp, Error, TEXT("BAS policy test: %s"), *LastResult);
+        UE_LOG(LogTemp, Error, TEXT("BAS policy: %s"), *LastResult);
+        return false;
     }
+    bRequestInFlight = true;
+    RequestStartTime = FPlatformTime::Seconds();
+    return true;
 }
 
 void ABASPolicyBridgeActor::HandleResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded)
 {
+    bRequestInFlight = false;
+    LatencySum += FPlatformTime::Seconds() - RequestStartTime;
+    ++TotalRequests;
+    const bool bLoop = bLoopActive;
+    auto Fail = [this, bLoop](const FString& Message)
+    {
+        LastResult = Message;
+        UE_LOG(LogTemp, Error, TEXT("BAS policy: %s"), *LastResult);
+        if (bLoop)
+        {
+            StopClosedLoop(TEXT("Stopped: ") + Message);
+        }
+    };
+
     if (!bSucceeded || !Response.IsValid())
     {
-        LastResult = TEXT("HTTP connection failed; check that mock_policy_server.py is running on port 8000");
-        UE_LOG(LogTemp, Error, TEXT("BAS policy test: %s"), *LastResult);
-        return;
+        return Fail(TEXT("HTTP connection failed; is the gateway running on port 8000?"));
     }
     TSharedPtr<FJsonObject> Body;
     const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Response->GetContentAsString());
     if (Response->GetResponseCode() != 200 || !FJsonSerializer::Deserialize(Reader, Body) || !Body.IsValid())
     {
-        LastResult = FString::Printf(TEXT("HTTP %d: %s"), Response->GetResponseCode(), *Response->GetContentAsString());
-        UE_LOG(LogTemp, Error, TEXT("BAS policy test: %s"), *LastResult);
-        return;
+        return Fail(FString::Printf(TEXT("HTTP %d: %s"), Response->GetResponseCode(), *Response->GetContentAsString()));
     }
     const TArray<TSharedPtr<FJsonValue>>* Action = nullptr;
     if (!Body->TryGetArrayField(TEXT("action"), Action) || !Action || Action->Num() != 7)
     {
-        LastResult = TEXT("Policy response has no seven-value action");
-        UE_LOG(LogTemp, Error, TEXT("BAS policy test: %s"), *LastResult);
-        return;
+        return Fail(TEXT("Policy response has no seven-value action"));
     }
-    if (bApplyJointTargets)
-    {
-        const TArray<TSharedPtr<FJsonValue>>* Targets = nullptr;
-        if (!Body->TryGetArrayField(TEXT("joint_targets"), Targets) || !Targets || Targets->Num() != 8)
-        {
-            LastResult = TEXT("No eight-value joint_targets in response; no motion applied");
-            UE_LOG(LogTemp, Warning, TEXT("BAS policy test: %s"), *LastResult);
-            return;
-        }
-        TArray<float> JointTargets;
-        for (int32 Index = 0; Index < 8; ++Index)
-        {
-            if (!(*Targets)[Index].IsValid() || (*Targets)[Index]->Type != EJson::Number ||
-                !FMath::IsFinite((*Targets)[Index]->AsNumber()))
-            {
-                LastResult = TEXT("Invalid joint_targets; no motion applied");
-                UE_LOG(LogTemp, Warning, TEXT("BAS policy test: %s"), *LastResult);
-                return;
-            }
-            if (Index < 7)
-            {
-                JointTargets.Add(static_cast<float>((*Targets)[Index]->AsNumber()));
-            }
-        }
-        APandaRobotActor* Panda = Cast<APandaRobotActor>(
-            UGameplayStatics::GetActorOfClass(this, APandaRobotActor::StaticClass()));
-        if (!Panda || !Panda->CommandJointTargets(JointTargets, (*Targets)[7]->AsNumber()))
-        {
-            LastResult = TEXT("Panda could not accept joint targets; run Simulate with motion test disabled");
-            UE_LOG(LogTemp, Warning, TEXT("BAS policy test: %s"), *LastResult);
-            return;
-        }
-        LastResult = TEXT("OK: applied bounded joint target from policy gateway");
-    }
-    else
+    if (!bLoop && !bApplyJointTargets)
     {
         LastResult = FString::Printf(TEXT("OK: received seven values; gripper=%.2f (not applied)"), (*Action)[6]->AsNumber());
+        UE_LOG(LogTemp, Display, TEXT("BAS policy: %s"), *LastResult);
+        return;
     }
-    UE_LOG(LogTemp, Display, TEXT("BAS policy test: %s"), *LastResult);
+
+    const TArray<TSharedPtr<FJsonValue>>* Targets = nullptr;
+    if (!Body->TryGetArrayField(TEXT("joint_targets"), Targets) || !Targets || Targets->Num() != 8)
+    {
+        return Fail(TEXT("No eight-value joint_targets in response; no motion applied"));
+    }
+    TArray<float> JointTargets;
+    for (int32 Index = 0; Index < 8; ++Index)
+    {
+        if (!(*Targets)[Index].IsValid() || (*Targets)[Index]->Type != EJson::Number ||
+            !FMath::IsFinite((*Targets)[Index]->AsNumber()))
+        {
+            return Fail(TEXT("Invalid joint_targets; no motion applied"));
+        }
+        if (Index < 7)
+        {
+            JointTargets.Add(static_cast<float>((*Targets)[Index]->AsNumber()));
+        }
+    }
+    FindActors();
+    if (!Panda || !Panda->CommandJointTargets(JointTargets, (*Targets)[7]->AsNumber(), bLoop ? StepDurationSec : 0.0f))
+    {
+        return Fail(TEXT("Panda could not accept joint targets; run Simulate with motion test disabled"));
+    }
+    if (bLoop)
+    {
+        ++Step;
+        FString Phase;
+        Body->TryGetStringField(TEXT("phase"), Phase);
+        LastResult = FString::Printf(TEXT("Step %d %s"), Step, *Phase);
+        if (Step % 25 == 0)
+        {
+            UE_LOG(LogTemp, Display, TEXT("BAS loop: episode %d %s"), Episode + 1, *LastResult);
+        }
+        return;
+    }
+    LastResult = TEXT("OK: applied bounded joint target from policy gateway");
+    UE_LOG(LogTemp, Display, TEXT("BAS policy: %s"), *LastResult);
 }

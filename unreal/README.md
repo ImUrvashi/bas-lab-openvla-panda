@@ -58,3 +58,13 @@ The existing `policy_server.py` serves `POST /act` on localhost and returns **se
 The installed Mac editor can build and preview the Unreal scene, and the mock connection test above runs entirely on this Mac without CUDA. The current `policy_server.py` hard-codes CUDA, so real model inference needs a separately adapted Apple MPS backend or a compatible remote GPU host. The repo does not contain the trained LoRA weights or OpenVLA base weights. Its existing endpoint can be accessed through a localhost port forward when the server is remote.
 
 Source robot license: `mujoco_menagerie/franka_emika_panda/LICENSE` (Apache-2.0).
+
+## Closed-loop episodes (scripted expert, no model)
+
+`ABASPolicyBridgeActor` can run whole episodes: capture → `POST /act` → IK → one 0.1 s arm step, repeated. The world waits for each reply, so slow inference only slows playback. Each request also carries the cube position and marker XY (MuJoCo metres), used only by the expert.
+
+1. Run `.venv/bin/python policy_ik_gateway.py --policy expert`.
+2. On `BASPolicyBridgeActor`, tick **BAS Policy Loop → Run Closed Loop On Begin Play**. Optionally set **Num Episodes** and **Randomize Layout**.
+3. Start **Simulate**. Read the `BAS loop:` lines in the Output Log: one per episode (SUCCESS/FAILED), then `Done: N/M successful` and the mean request latency.
+
+The success rule matches `closed_loop_panda.py`: the cube is released on the marker (within 4 cm, at rest height) with gripper openness above 0.8, for 10 consecutive steps. While the cube is held, the fingers stop at 2.5 cm, so the measured openness is about 0.62, as in MuJoCo. For OpenVLA, start the gateway with `--upstream-url` instead of `--policy expert`.

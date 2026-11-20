@@ -33,6 +33,23 @@ public:
     UFUNCTION(BlueprintPure, Category = "BAS Workcell|Task")
     bool IsCubePlaced() const;
 
+    /** Cube start and marker centre in MuJoCo metres (x forward, y left). */
+    UPROPERTY(EditAnywhere, Category = "BAS Workcell|Task")
+    FVector2D CubeStartXY = FVector2D(0.45, 0.0);
+
+    UPROPERTY(EditAnywhere, Category = "BAS Workcell|Task")
+    FVector2D MarkerXY = FVector2D(0.60, 0.0);
+
+    /** Put the marker at MarkerXY and the cube back at CubeStartXY. */
+    UFUNCTION(CallInEditor, BlueprintCallable, Category = "BAS Workcell|Task")
+    void ResetTask();
+
+    /** Draw a layout from the MuJoCo training ranges (cube/marker at least 13 cm apart). */
+    void RandomizeLayout(FRandomStream& Stream);
+
+    /** Cube centre in MuJoCo metres. */
+    FVector GetCubePositionMujoco() const;
+
     /** Fixed-layout controller check; uses precomputed Panda IK poses, not OpenVLA. */
     UPROPERTY(EditAnywhere, Category = "BAS Workcell|Scripted Test")
     bool bRunScriptedPickPlaceOnBeginPlay = false;
