@@ -6,6 +6,7 @@ Unreal's bridge calls POST /act once per 0.1 s policy step. Where the 7-D action
   upstream  OpenVLA policy_server.py, e.g. on the GPU server through an SSH tunnel
 
     .venv/bin/python policy_ik_gateway.py --policy expert
+    .venv/bin/python policy_ik_gateway.py --policy expert --record demonstrations_unreal --seed 1
     .venv/bin/python policy_ik_gateway.py --upstream-url http://127.0.0.1:8001/act
 """
 
@@ -22,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 
+from demo_recorder import DemoRecorder
 from expert_policy import ExpertPolicy
 from openvla_adapter import PandaKinematics, decode_action
 
@@ -60,10 +62,10 @@ def validate_request(request):
     if (not isinstance(opening, (int, float)) or isinstance(opening, bool) or
             not math.isfinite(opening) or not 0 <= opening <= 1):
         raise ValueError("gripper_opening must be a number from 0 to 1")
-    return joints, float(opening)
+    return joints, float(opening), rgb
 
 
-def expert_action(handler, request, joints, opening):
+def expert_action(handler, request, joints, opening, rgb):
     """Run expert_policy.ExpertPolicy on the privileged state; one expert per episode."""
     cube = finite_vector(request.get("cube_pos"), 3, "cube_pos")
     marker = finite_vector(request.get("marker_xy"), 2, "marker_xy")
@@ -74,9 +76,13 @@ def expert_action(handler, request, joints, opening):
     if step == 0 or handler.expert is None or handler.expert_episode != episode:
         handler.expert = ExpertPolicy(marker, R_hand)    # reset pose defines the nominal rotation
         handler.expert_episode = episode
+        if handler.recorder:
+            handler.recorder.begin(episode, request["instruction"], cube, marker)
     action, phase = handler.expert.act(hand, cube, opening, R_hand, step)
     if phase == "DONE":
         action = np.r_[np.zeros(6), 1.0]
+    if handler.recorder:    # executed = label + DART drift; the clean label is what gets stored
+        return handler.recorder.step(rgb, hand, cube, opening, action.tolist(), phase), phase
     return action.tolist(), phase
 
 
@@ -101,6 +107,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     policy = "sample"
     expert = None
     expert_episode = None
+    recorder = None
     requests = 0
     lock = threading.Lock()
 
@@ -129,7 +136,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if not 0 < length <= MAX_BODY_BYTES:
                 raise ValueError("invalid request size")
             request = json.loads(self.rfile.read(length))
-            joints, opening = validate_request(request)
+            joints, opening, rgb = validate_request(request)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             return self.send_json(400, {"error": str(exc)})
 
@@ -146,7 +153,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     action = json.load(response)["action"]
             with self.lock:
                 if not self.upstream_url and self.policy == "expert":
-                    action, phase = expert_action(type(self), request, joints, opening)
+                    action, phase = expert_action(type(self), request, joints, opening, rgb)
                 elif not self.upstream_url:
                     action = SAMPLE_ACTION
                 safe_action, targets, residual = convert_action(self.kin, joints, opening, action)
@@ -167,10 +174,16 @@ def main():
     parser.add_argument("--policy", choices=("sample", "expert"), default="sample",
                         help="local action source when --upstream-url is not given")
     parser.add_argument("--upstream-url", help="OpenVLA POST /act endpoint (overrides --policy)")
+    parser.add_argument("--record", help="expert mode: save DART demonstrations to this folder")
+    parser.add_argument("--seed", type=int, default=1, help="recording noise seed (one manifest per seed)")
     args = parser.parse_args()
     GatewayHandler.kin = PandaKinematics()
     GatewayHandler.upstream_url = args.upstream_url
     GatewayHandler.policy = args.policy
+    if args.record:
+        if args.upstream_url or args.policy != "expert":
+            parser.error("--record needs --policy expert")
+        GatewayHandler.recorder = DemoRecorder(args.record, args.seed)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), GatewayHandler)
     print(f"IK_GATEWAY_READY http://127.0.0.1:{args.port} mode="
           f"{'upstream' if args.upstream_url else args.policy}", flush=True)

@@ -68,3 +68,12 @@ Source robot license: `mujoco_menagerie/franka_emika_panda/LICENSE` (Apache-2.0)
 3. Start **Simulate**. Read the `BAS loop:` lines in the Output Log: one per episode (SUCCESS/FAILED), then `Done: N/M successful` and the mean request latency.
 
 The success rule matches `closed_loop_panda.py`: the cube is released on the marker (within 4 cm, at rest height) with gripper openness above 0.8, for 10 consecutive steps. While the cube is held, the fingers stop at 2.5 cm, so the measured openness is about 0.62, as in MuJoCo. For OpenVLA, start the gateway with `--upstream-url` instead of `--policy expert`.
+
+## Recording task-1 demonstrations
+
+1. Run `.venv/bin/python policy_ik_gateway.py --policy expert --record demonstrations_unreal --seed 1`. Use a new `--seed` for each session; it names the manifest and drives the noise.
+2. On `BASPolicyBridgeActor`: tick **Run Closed Loop On Begin Play** and **Randomize Layout**, set **Num Episodes** (for example 50), and give **Layout Seed** a new value for each session so layouts don't repeat. Keep Unreal in focus, or turn off *Use Less CPU when in Background*.
+3. Start **Simulate**. The gateway prints `SAVED expert_NNNN.npz` or `REJECTED ...` for each episode.
+4. Build the training export: `.venv/bin/python build_unreal_export.py --out panda_openvla_data_unreal_t1`, then copy that folder to the GPU server.
+
+The recipe is the same as `record_expert_demos.py`: correlated noise on the executed motion, with the clean expert action stored as the label, and 10% of episodes without noise. When the gateway sends phases, the bridge ends an episode only after the expert reaches DONE, so the recordings include the retreat. `demonstrations*/` and `panda_openvla_data*/` are Git-ignored.

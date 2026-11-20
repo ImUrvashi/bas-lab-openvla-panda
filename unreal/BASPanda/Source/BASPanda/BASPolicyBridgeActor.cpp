@@ -99,6 +99,7 @@ void ABASPolicyBridgeActor::StartEpisode()
     Panda->ResetHome();
     Step = 0;
     SuccessStreak = 0;
+    LastPhase.Reset();
     LoopStatus = FString::Printf(TEXT("Episode %d/%d running"), Episode + 1, NumEpisodes);
     UE_LOG(LogTemp, Display, TEXT("BAS loop: episode %d start, cube (%.3f, %.3f) marker (%.3f, %.3f)"),
         Episode + 1, Workcell->CubeStartXY.X, Workcell->CubeStartXY.Y, Workcell->MarkerXY.X, Workcell->MarkerXY.Y);
@@ -132,7 +133,9 @@ void ABASPolicyBridgeActor::Tick(float DeltaSeconds)
     {
         const bool bReleasedOnMarker = Workcell->IsCubePlaced() && Panda->GetGripperOpenness() > ReleasedOpenness;
         SuccessStreak = bReleasedOnMarker ? SuccessStreak + 1 : 0;
-        if (SuccessStreak >= SuccessHoldSteps)
+        // A scripted expert reports phases: let it finish its retreat (recorded demos end at DONE).
+        const bool bExpertFinished = LastPhase.IsEmpty() || LastPhase == TEXT("DONE");
+        if (SuccessStreak >= SuccessHoldSteps && bExpertFinished)
         {
             EndEpisode(true, TEXT("cube released on marker"));
             return;
@@ -280,9 +283,9 @@ void ABASPolicyBridgeActor::HandleResponse(FHttpRequestPtr Request, FHttpRespons
     if (bLoop)
     {
         ++Step;
-        FString Phase;
-        Body->TryGetStringField(TEXT("phase"), Phase);
-        LastResult = FString::Printf(TEXT("Step %d %s"), Step, *Phase);
+        LastPhase.Reset();
+        Body->TryGetStringField(TEXT("phase"), LastPhase);
+        LastResult = FString::Printf(TEXT("Step %d %s"), Step, *LastPhase);
         if (Step % 25 == 0)
         {
             UE_LOG(LogTemp, Display, TEXT("BAS loop: episode %d %s"), Episode + 1, *LastResult);
