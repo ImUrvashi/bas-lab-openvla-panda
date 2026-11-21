@@ -36,6 +36,7 @@ MAX_BODY_BYTES = 1_000_000
 MAX_HAND_STEP_M = 0.03
 MAX_JOINT_STEP_RAD = 0.15
 MAX_IK_RESIDUAL_M = 0.01
+POSTURE_GAIN = 0.05        # per-step pull of the spare DoF towards the home posture
 SAMPLE_ACTION = [0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
 
@@ -123,7 +124,7 @@ def convert_action(kin, joints, opening, action):
     if distance > MAX_HAND_STEP_M:
         action[:3] *= MAX_HAND_STEP_M / distance
     action[6] = np.clip(action[6], 0.0, 1.0)
-    target8, residual = decode_action(kin, np.r_[joints, opening], action)
+    target8, residual = decode_action(kin, np.r_[joints, opening], action, POSTURE_GAIN)
     if not math.isfinite(residual) or residual > MAX_IK_RESIDUAL_M:
         raise ValueError(f"IK residual too large: {residual:.4f} m")
     target8 = np.asarray(target8, dtype=np.float64)

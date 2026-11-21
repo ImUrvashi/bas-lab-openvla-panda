@@ -35,6 +35,7 @@ OUT_DIR = PROJECT_DIR / "openvla_adapter_out"
 
 ARM_JOINTS = tuple(f"joint{i}" for i in range(1, 8))
 EE_BODY = "hand"
+REST_Q = np.array([0.0, 0.0, 0.0, -1.5708, 0.0, 1.5708, -0.7853])   # home posture
 
 
 # --------------------------------------------------------------------------- rotations
@@ -99,7 +100,7 @@ class PandaKinematics:
             self.data.xmat[self.hand_id].reshape(3, 3).copy(),
         )
 
-    def ik(self, q_init, target_pos, target_rot, iters=100, damping=1e-2, tol=1e-5):
+    def ik(self, q_init, target_pos, target_rot, iters=100, damping=1e-2, tol=1e-5, posture_gain=0.0):
         """Damped least-squares IK from q_init. Returns (q, position_error_m)."""
         q = np.array(q_init, dtype=np.float64)
         jacp = np.zeros((3, self.model.nv))
@@ -115,6 +116,12 @@ class PandaKinematics:
             J = np.vstack([jacp[:, self.dof_idx], jacr[:, self.dof_idx]])
             dq = J.T @ np.linalg.solve(J @ J.T + damping * np.eye(6), err)
             q = np.clip(q + dq, self.q_lo, self.q_hi)
+        if posture_gain > 0:    # use the spare DoF to drift towards the rest posture (keeps the elbow off its limit)
+            self.fk(q)
+            mujoco.mj_jacBody(self.model, self.data, jacp, jacr, self.hand_id)
+            J = np.vstack([jacp[:, self.dof_idx], jacr[:, self.dof_idx]])
+            null = np.eye(len(q)) - np.linalg.pinv(J) @ J
+            q = np.clip(q + posture_gain * null @ (REST_Q - q), self.q_lo, self.q_hi)
         pos, _ = self.fk(q)
         return q, float(np.linalg.norm(target_pos - pos))
 
@@ -145,7 +152,7 @@ def encode_action_next_state(kin, state, next_state, action):
     return np.concatenate([p1 - p0, rot_to_euler_xyz(R1 @ R0.T), [action[7]]]).astype(np.float32)
 
 
-def decode_action(kin, state, action7):
+def decode_action(kin, state, action7, posture_gain=0.0):
     """
     (8-D state, 7-D EE delta action) -> 8-D joint-target action for PandaActionInterface.
     Returns (action8, position_residual_m).
@@ -154,7 +161,7 @@ def decode_action(kin, state, action7):
     p_s, R_s = kin.fk(state[:7])
     target_pos = p_s + action7[:3]
     target_rot = euler_xyz_to_rot(action7[3:6]) @ R_s
-    q, resid = kin.ik(state[:7], target_pos, target_rot)
+    q, resid = kin.ik(state[:7], target_pos, target_rot, posture_gain=posture_gain)
     grip = float(np.clip(action7[6], 0.0, 1.0))
     return np.concatenate([q, [grip]]).astype(np.float32), resid
 
