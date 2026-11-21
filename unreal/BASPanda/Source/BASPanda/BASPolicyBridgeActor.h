@@ -23,9 +23,13 @@ public:
     UPROPERTY(EditAnywhere, Category = "BAS Policy Test")
     FString PolicyUrl = TEXT("http://127.0.0.1:8000/act");
 
-    /** The sentence the side_v12 model was trained on. */
+    /** Used only when Use Task Instruction is off; task 1's sentence is the one side_v12 was trained on. */
     UPROPERTY(EditAnywhere, Category = "BAS Policy Test")
     FString Instruction = TEXT("Pick up the red cube and place it on the yellow marker.");
+
+    /** Send the workcell's sentence for its current task (and task 4/5 target). */
+    UPROPERTY(EditAnywhere, Category = "BAS Policy Test")
+    bool bUseTaskInstruction = true;
 
     UPROPERTY(EditAnywhere, Category = "BAS Policy Test")
     bool bSendOnBeginPlay = false;

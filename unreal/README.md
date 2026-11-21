@@ -77,3 +77,17 @@ The success rule matches `closed_loop_panda.py`: the cube is released on the mar
 4. Build the training export: `.venv/bin/python build_unreal_export.py --out panda_openvla_data_unreal_t1`, then copy that folder to the GPU server.
 
 The recipe is the same as `record_expert_demos.py`: correlated noise on the executed motion, with the clean expert action stored as the label, and 10% of episodes without noise. When the gateway sends phases, the bridge ends an episode only after the expert reaches DONE, so the recordings include the retreat. `demonstrations*/` and `panda_openvla_data*/` are Git-ignored.
+
+## Five bench tasks
+
+`BASWorkcellActor` → **Task** picks the task; only that task's props are shown (and seen by the policy camera).
+
+| Task | Props | Instruction | Success |
+|---|---|---|---|
+| 1 | red cube, yellow marker | Pick up the red cube and place it on the yellow marker. | cube on marker, released |
+| 2 | orange canister, dark dock with green centre | Move the sample canister to the analysis dock. | canister within 2.5 cm of dock centre, upright (< 15°), released |
+| 3 | navy tool case, open storage tray | Put the tool case in the storage tray. | case inside the tray walls, released |
+| 4 | red and blue samples, red and blue pads | Put the red/blue sample on the red/blue pad. | named sample on its pad, other sample not moved |
+| 5 | console with green and red buttons and lights | Press the green/red button on the control panel. | named button latched (its light turns on), other button not pressed, fingertips back up |
+
+Layout fields are MuJoCo metres: object start `CubeStartXY`, target `MarkerXY` (task 4: red sample/pad; `OtherObjectXY`/`OtherTargetXY` are blue). `TargetVariant` picks the sample (task 4) or button (task 5); `bSwapButtons` swaps the button sides. With **Randomize Layout** on the bridge, each episode draws a new layout and target for the selected task. The bridge sends the task's instruction (turn off **Use Task Instruction** to send its own) plus `task`, `cube_pos` (active object) and `target_pos`. Expert recording is task 1 only for now.

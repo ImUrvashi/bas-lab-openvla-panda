@@ -72,6 +72,8 @@ def validate_request(request):
 
 def expert_action(handler, request, joints, opening, rgb):
     """Run expert_policy.ExpertPolicy on the privileged state; one expert per episode."""
+    if request.get("task", 1) != 1:
+        raise ValueError(f"no scripted expert for task {request['task']} yet (task 1 only)")
     cube = finite_vector(request.get("cube_pos"), 3, "cube_pos")
     marker = finite_vector(request.get("marker_xy"), 2, "marker_xy")
     episode, step = request.get("episode"), request.get("step")

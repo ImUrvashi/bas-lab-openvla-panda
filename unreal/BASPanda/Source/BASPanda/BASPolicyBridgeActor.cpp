@@ -13,9 +13,8 @@
 
 namespace
 {
-    // closed_loop_panda.py: success once the released cube stays on the marker for 10 policy steps.
+    // closed_loop_panda.py: success once the task check holds for 10 policy steps.
     constexpr int32 SuccessHoldSteps = 10;
-    constexpr float ReleasedOpenness = 0.8f;
 
     TArray<TSharedPtr<FJsonValue>> JsonNumbers(std::initializer_list<double> Values)
     {
@@ -101,8 +100,10 @@ void ABASPolicyBridgeActor::StartEpisode()
     SuccessStreak = 0;
     LastPhase.Reset();
     LoopStatus = FString::Printf(TEXT("Episode %d/%d running"), Episode + 1, NumEpisodes);
-    UE_LOG(LogTemp, Display, TEXT("BAS loop: episode %d start, cube (%.3f, %.3f) marker (%.3f, %.3f)"),
-        Episode + 1, Workcell->CubeStartXY.X, Workcell->CubeStartXY.Y, Workcell->MarkerXY.X, Workcell->MarkerXY.Y);
+    const FVector Object = Workcell->GetActiveObjectMujoco(), Target = Workcell->GetTargetMujoco();
+    UE_LOG(LogTemp, Display, TEXT("BAS loop: episode %d start, task %d \"%s\", object (%.3f, %.3f) target (%.3f, %.3f)"),
+        Episode + 1, static_cast<int32>(Workcell->Task) + 1, *Workcell->GetTaskInstruction(),
+        Object.X, Object.Y, Target.X, Target.Y);
 }
 
 void ABASPolicyBridgeActor::EndEpisode(bool bSuccess, const FString& Why)
@@ -131,13 +132,12 @@ void ABASPolicyBridgeActor::Tick(float DeltaSeconds)
     }
     if (Step > 0)
     {
-        const bool bReleasedOnMarker = Workcell->IsCubePlaced() && Panda->GetGripperOpenness() > ReleasedOpenness;
-        SuccessStreak = bReleasedOnMarker ? SuccessStreak + 1 : 0;
+        SuccessStreak = Workcell->IsTaskSuccess() ? SuccessStreak + 1 : 0;
         // A scripted expert reports phases: let it finish its retreat (recorded demos end at DONE).
         const bool bExpertFinished = LastPhase.IsEmpty() || LastPhase == TEXT("DONE");
         if (SuccessStreak >= SuccessHoldSteps && bExpertFinished)
         {
-            EndEpisode(true, TEXT("cube released on marker"));
+            EndEpisode(true, TEXT("task check passed"));
             return;
         }
     }
@@ -173,7 +173,8 @@ bool ABASPolicyBridgeActor::SendObservation()
     }
 
     TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
-    Payload->SetStringField(TEXT("instruction"), Instruction);
+    Payload->SetStringField(TEXT("instruction"),
+        bUseTaskInstruction && Workcell ? Workcell->GetTaskInstruction() : Instruction);
     Payload->SetStringField(TEXT("image_b64"), FBase64::Encode(RGB.GetData(), RGB.Num()));
     Payload->SetArrayField(TEXT("shape"), JsonNumbers({240, 320, 3}));
     if (Panda && Panda->ArmJointsRad.Num() == 7)
@@ -189,9 +190,12 @@ bool ABASPolicyBridgeActor::SendObservation()
     // Privileged task state for the scripted expert and for logging; OpenVLA never sees it.
     if (Workcell)
     {
-        const FVector Cube = Workcell->GetCubePositionMujoco();
-        Payload->SetArrayField(TEXT("cube_pos"), JsonNumbers({Cube.X, Cube.Y, Cube.Z}));
-        Payload->SetArrayField(TEXT("marker_xy"), JsonNumbers({Workcell->MarkerXY.X, Workcell->MarkerXY.Y}));
+        // cube_pos/marker_xy keep task 1's field names; for other tasks they are the active object and target.
+        const FVector Object = Workcell->GetActiveObjectMujoco(), Target = Workcell->GetTargetMujoco();
+        Payload->SetNumberField(TEXT("task"), static_cast<int32>(Workcell->Task) + 1);
+        Payload->SetArrayField(TEXT("cube_pos"), JsonNumbers({Object.X, Object.Y, Object.Z}));
+        Payload->SetArrayField(TEXT("marker_xy"), JsonNumbers({Target.X, Target.Y}));
+        Payload->SetArrayField(TEXT("target_pos"), JsonNumbers({Target.X, Target.Y, Target.Z}));
     }
     Payload->SetNumberField(TEXT("episode"), Episode);
     Payload->SetNumberField(TEXT("step"), Step);
