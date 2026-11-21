@@ -1,0 +1,15 @@
+#!/bin/bash
+#PBS -N vla_train
+#PBS -q GPU_only
+#PBS -l select=1:ncpus=8:mem=64gb
+#PBS -l walltime=24:00:00
+#PBS -j oe
+# qsub -v GPU=2,LR=5e-4,STEPS=2500,DATA=panda_openvla_data_unreal_t1,NOTE=t1_lr5e-4 train.pbs
+source /data/urvashib/openvla_panda/code/server/env.sh
+export CUDA_VISIBLE_DEVICES=${GPU:?set GPU}
+python panda_tests/finetune_panda.py \
+    --data_dir $ROOT/datasets/${DATA:?set DATA} --run_root_dir $ROOT/runs --run_id_note ${NOTE:?set NOTE} \
+    --resume_adapter $ROOT/${RESUME:-weights/side_v12_step2500}/lora_adapter \
+    --batch_size 4 --grad_accumulation_steps 2 --max_steps ${STEPS:-2500} \
+    --learning_rate ${LR:-5e-4} --lr_schedule cosine --warmup_steps 100 \
+    --save_steps 500 --keep_checkpoints

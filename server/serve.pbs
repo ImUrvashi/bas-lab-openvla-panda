@@ -1,0 +1,11 @@
+#!/bin/bash
+#PBS -N vla_serve
+#PBS -q GPU_only
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -l walltime=08:00:00
+#PBS -j oe
+# qsub -v GPU=1,ADAPTER=weights/side_v12_step2500,PORT=8001 serve.pbs
+source /data/urvashib/openvla_panda/code/server/env.sh
+export CUDA_VISIBLE_DEVICES=${GPU:-1}
+# dataset_statistics.json is read from next to lora_adapter/ (weights, run and checkpoint dirs all have it)
+python panda_tests/policy_server.py --adapter_dir $ROOT/${ADAPTER:-weights/side_v12_step2500}/lora_adapter --port ${PORT:-8001}
