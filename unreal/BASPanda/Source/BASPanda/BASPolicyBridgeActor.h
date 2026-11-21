@@ -57,7 +57,7 @@ public:
     int32 NumEpisodes = 1;
 
     UPROPERTY(EditAnywhere, Category = "BAS Policy Loop", meta = (ClampMin = "1"))
-    int32 MaxSteps = 400;
+    int32 MaxSteps = 600;
 
     /** Simulated time per policy step; the world waits for each action, so latency only slows playback. */
     UPROPERTY(EditAnywhere, Category = "BAS Policy Loop", meta = (ClampMin = "0.02"))
