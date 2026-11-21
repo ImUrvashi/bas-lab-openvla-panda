@@ -87,9 +87,9 @@ an item released inside the drawer/container, or a cartridge released aligned ov
 | Task | Props | Instruction | Success |
 |---|---|---|---|
 | 1 | red cube, yellow marker | Pick up the red cube and place it on the yellow marker. | cube on marker, released |
-| 2 | cabinet with drawer (orange front, dark knob), yellow tool | Put the tool in the drawer and close it. | tool in drawer, drawer shut, hand free |
+| 2 | cabinet with drawer (orange front, dark knob), green tool | Put the tool in the drawer and close it. | tool in drawer, drawer shut, hand free |
 | 3 | coolant pipe, blue valve body, red quarter-turn lever, light | Close the coolant valve. | lever turned 90° (light green), hand free |
-| 4 | air scrubber with yellow-rimmed slot and light, teal cartridge | Insert the filter cartridge into the air scrubber. | cartridge seated (light green), hand free |
+| 4 | low air scrubber with yellow-rimmed slot and light, teal cartridge | Insert the filter cartridge into the air scrubber. | cartridge seated (light green), hand free |
 | 5 | purple container with hinged lid and latch light, pink vial | Put the sample vial in the container and close the lid. | vial inside, lid latched (light green), hand free |
 
 Homes (MuJoCo metres): loose items in a row at x 0.55 in front of the arm (cube y −0.125, tool −0.04, vial 0.04, cartridge 0.12); cabinet (0.44, −0.27), valve (0.45, 0.25), pad (0.66, −0.17), scrubber (0.66, 0.02), container (0.64, 0.21). With **Randomize Layout**

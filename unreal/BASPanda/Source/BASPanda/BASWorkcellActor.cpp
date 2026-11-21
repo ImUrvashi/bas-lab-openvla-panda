@@ -47,10 +47,12 @@ namespace
     // Task 3: lever 10.5 cm above the bench, along the pipe (y) when open, across it (x) when closed.
     constexpr double LeverZ = 0.105;
 
-    // Task 4: scrubber top at 8 cm with a slot; a seated cartridge sticks out 2 cm.
-    const FVector ScrubberHalf(0.05, 0.065, 0.04);
+    // Task 4: low scrubber (5 cm, so the camera sees the item row over it) with a 4 cm deep slot;
+    // a seated cartridge sticks out 4 cm.
+    const FVector ScrubberHalf(0.05, 0.065, 0.025);
     const FVector CartridgeHalf(0.0125, 0.03, 0.04);
-    constexpr double SeatedCartridgeZ = 2 * 0.04 - 0.06 + 0.04;
+    constexpr double ScrubberTop = 2 * 0.025, SlotDepth = 0.04;
+    constexpr double SeatedCartridgeZ = ScrubberTop - SlotDepth + 0.04;
 
     // Task 5: open-top container 10 x 10 x 6 cm; lid hinged on its robot-side (-x) top edge.
     constexpr double ContainerHalf = 0.05, ContainerH = 0.06, ContainerInner = 0.044;
@@ -213,10 +215,10 @@ ABASWorkcellActor::ABASWorkcellActor()
     // Task 4: air scrubber with a yellow-rimmed slot and seated light, loose filter cartridge.
     ScrubberRoot = Root(WorkcellRoot, TEXT("ScrubberRoot"));
     Box(ScrubberRoot, TEXT("ScrubberBody"), ScrubberHalf, FVector(0, 0, ScrubberHalf.Z), FLinearColor(0.75f, 0.8f, 0.9f));
-    Box(ScrubberRoot, TEXT("ScrubberSlotRim"), FVector(0.022, 0.04, 0.0008), FVector(0, 0, 0.0805),
+    Box(ScrubberRoot, TEXT("ScrubberSlotRim"), FVector(0.022, 0.04, 0.0008), FVector(0, 0, ScrubberTop + 0.0005),
         FLinearColor(1.0f, 0.8f, 0.0f));
-    Box(ScrubberRoot, TEXT("ScrubberSlot"), FVector(0.016, 0.034, 0.001), FVector(0, 0, 0.081), FLinearColor(0.02f, 0.02f, 0.02f));
-    ScrubberLight = Cyl(ScrubberRoot, TEXT("ScrubberLight"), 0.008, 0.004, FVector(0.045, 0.05, 0.0815), DimGreen);
+    Box(ScrubberRoot, TEXT("ScrubberSlot"), FVector(0.016, 0.034, 0.001), FVector(0, 0, ScrubberTop + 0.001), FLinearColor(0.02f, 0.02f, 0.02f));
+    ScrubberLight = Cyl(ScrubberRoot, TEXT("ScrubberLight"), 0.008, 0.004, FVector(0.035, 0.05, ScrubberTop + 0.0015), DimGreen);
     Cartridge = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("FilterCartridge"));
     Cartridge->SetupAttachment(WorkcellRoot);
     Cartridge->SetMobility(EComponentMobility::Movable);
@@ -849,7 +851,7 @@ void ABASWorkcellActor::OnConstruction(const FTransform& Transform)
     SetColour(BenchTop, FLinearColor(0.68f, 0.71f, 0.75f));
     SetColour(TargetMarker, FLinearColor(1.0f, 0.85f, 0.0f));
     SetColour(PickCube, FLinearColor(0.9f, 0.12f, 0.08f));
-    SetColour(Tool, FLinearColor(1.0f, 0.75f, 0.05f));       // yellow tool
+    SetColour(Tool, FLinearColor(0.1f, 0.65f, 0.2f));        // green tool
     SetColour(Cartridge, FLinearColor(0.1f, 0.6f, 0.6f));    // teal filter cartridge
     SetColour(Vial, FLinearColor(0.95f, 0.35f, 0.6f));       // pink sample vial
     for (int32 Index = 0; Index < ColouredParts.Num() && Index < PartColours.Num(); ++Index)
