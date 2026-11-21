@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
+#include "BASWorkcellActor.h"
 #include "BASPolicyBridgeActor.generated.h"
 
 class ABASWorkcellActor;
@@ -47,6 +48,10 @@ public:
     /** Run episodes on Play/Simulate: capture -> gateway -> IK -> one 0.1 s arm step, repeated. */
     UPROPERTY(EditAnywhere, Category = "BAS Policy Loop")
     bool bRunClosedLoopOnBeginPlay = false;
+
+    /** Task to run; the loop sets it on the workcell at start (and picks that task's sentence and success check). */
+    UPROPERTY(EditAnywhere, Category = "BAS Policy Loop")
+    EBASTask Task = EBASTask::CubeToPad;
 
     UPROPERTY(EditAnywhere, Category = "BAS Policy Loop", meta = (ClampMin = "1"))
     int32 NumEpisodes = 1;

@@ -72,6 +72,7 @@ void ABASPolicyBridgeActor::StartClosedLoop()
         UE_LOG(LogTemp, Error, TEXT("BAS loop: %s"), *LoopStatus);
         return;
     }
+    Workcell->Task = Task;
     LayoutStream.Initialize(LayoutSeed);
     Episode = 0;
     Successes = 0;
