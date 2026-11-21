@@ -25,6 +25,7 @@ import numpy as np
 
 from demo_recorder import DemoRecorder
 from expert_policy import ExpertPolicy
+from multitask_expert import NOISE as MULTI_NOISE, MultiTaskExpert, TaskState, task_success
 from openvla_adapter import PandaKinematics, decode_action
 from panda_openvla_dataset import resize_image
 from PIL import Image
@@ -72,9 +73,10 @@ def validate_request(request):
 
 
 def expert_action(handler, request, joints, opening, rgb):
-    """Run expert_policy.ExpertPolicy on the privileged state; one expert per episode."""
-    if request.get("task", 1) != 1:
-        raise ValueError(f"no scripted expert for task {request['task']} yet (task 1 only)")
+    """Scripted expert on the privileged state, one per episode: task 1 ExpertPolicy, tasks 2-5 MultiTaskExpert."""
+    task = request.get("task", 1)
+    if task != 1:
+        return multitask_action(handler, request, task, joints, opening, rgb)
     cube = finite_vector(request.get("cube_pos"), 3, "cube_pos")
     marker = finite_vector(request.get("marker_xy"), 2, "marker_xy")
     episode, step = request.get("episode"), request.get("step")
@@ -91,6 +93,27 @@ def expert_action(handler, request, joints, opening, rgb):
         action = np.r_[np.zeros(6), 1.0]
     if handler.recorder:    # executed = label + DART drift; the clean label is what gets stored
         return handler.recorder.step(rgb, hand, cube, opening, action.tolist(), phase), phase
+    return action.tolist(), phase
+
+
+def multitask_action(handler, request, task, joints, opening, rgb):
+    if task not in (2, 3, 4, 5) or not isinstance(request.get("state"), dict):
+        raise ValueError("tasks 2-5 need task in 2..5 and a state object")
+    episode, step = request.get("episode"), request.get("step")
+    if not isinstance(episode, int) or not isinstance(step, int):
+        raise ValueError("expert mode needs integer episode and step")
+    state = TaskState(request["state"])
+    hand, R_hand = handler.kin.fk(joints)
+    if step == 0 or handler.expert is None or handler.expert_episode != episode:
+        handler.expert = MultiTaskExpert(task, R_hand)
+        handler.expert_episode = episode
+        if handler.recorder:
+            handler.recorder.begin(episode, request["instruction"], state.obj, state.target[:2], task)
+    action, phase = handler.expert.act(hand, R_hand, opening, state, step)
+    if handler.recorder:
+        success = task_success(task, state) if phase == "DONE" else None
+        return handler.recorder.step(rgb, hand, state.obj, opening, action.tolist(), phase,
+                                     noise_scale=MULTI_NOISE.get(phase, 0.0), success=success), phase
     return action.tolist(), phase
 
 

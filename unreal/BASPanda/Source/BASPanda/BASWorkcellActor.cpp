@@ -70,7 +70,7 @@ namespace
         {0.55, 0.04},   // sample vial
         {0.55, 0.12},   // filter cartridge
         {0.66, 0.02},   // air scrubber (front centre)
-        {0.64, 0.21},   // sample container (front right), lid hinged on its robot side
+        {0.625, 0.225}, // sample container (front right), lid hinged on its robot side
         {0.45, 0.25},   // coolant valve (back right) on a pipe along y
     };
 
