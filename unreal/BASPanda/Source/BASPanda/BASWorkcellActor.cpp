@@ -57,6 +57,20 @@ namespace
     const FVector LidHinge(-0.05, 0.0, 0.06);
     constexpr double VialR = 0.015, VialH = 0.05;
 
+    // One station bench: every prop has a home spot (MuJoCo metres), all inside reach and the policy camera view.
+    enum EProp { PCube, PPad, PTool, PCabinet, PVial, PCartridge, PScrubber, PContainer, PValve, PropCount };
+    const FVector2D HomeXY[PropCount] = {
+        {0.45, -0.03},  // red cube (staging row)
+        {0.64, -0.17},  // yellow processing pad
+        {0.45, 0.04},   // tool (staging row)
+        {0.47, -0.27},  // cabinet; drawer opens towards +y
+        {0.53, -0.04},  // sample vial
+        {0.53, 0.06},   // filter cartridge
+        {0.64, 0.04},   // air scrubber
+        {0.62, 0.22},   // sample container, lid hinged on its robot side
+        {0.44, 0.24},   // coolant valve on a pipe along y
+    };
+
     // MuJoCo metres (y left) -> Unreal centimetres (y right): the one place this flip happens.
     FVector MujocoToUnrealCm(const FVector& Metres)
     {
@@ -182,10 +196,10 @@ ABASWorkcellActor::ABASWorkcellActor()
 
     // Task 3: coolant pipe on two supports, valve body, stem, quarter-turn lever, status light.
     ValveRoot = Root(WorkcellRoot, TEXT("ValveRoot"));
-    Cyl(ValveRoot, TEXT("CoolantPipe"), 0.015, 0.32, FVector(0, 0, 0.05), FLinearColor(0.7f, 0.72f, 0.75f),
+    Cyl(ValveRoot, TEXT("CoolantPipe"), 0.015, 0.24, FVector(0, 0, 0.05), FLinearColor(0.7f, 0.72f, 0.75f),
         FRotator(0, 0, 90));
-    Box(ValveRoot, TEXT("PipeSupportL"), FVector(0.012, 0.012, 0.025), FVector(0, 0.12, 0.025), Dark);
-    Box(ValveRoot, TEXT("PipeSupportR"), FVector(0.012, 0.012, 0.025), FVector(0, -0.12, 0.025), Dark);
+    Box(ValveRoot, TEXT("PipeSupportL"), FVector(0.012, 0.012, 0.025), FVector(0, 0.09, 0.025), Dark);
+    Box(ValveRoot, TEXT("PipeSupportR"), FVector(0.012, 0.012, 0.025), FVector(0, -0.09, 0.025), Dark);
     Box(ValveRoot, TEXT("ValveBody"), FVector(0.03, 0.03, 0.03), FVector(0, 0, 0.05), FLinearColor(0.2f, 0.35f, 0.6f));
     Cyl(ValveRoot, TEXT("ValveStem"), 0.006, 0.02, FVector(0, 0, 0.09), Dark);
     ValveLeverRoot = Root(ValveRoot, TEXT("ValveLeverRoot"));
@@ -251,17 +265,6 @@ UStaticMeshComponent* ABASWorkcellActor::ActiveObject() const
     }
 }
 
-USceneComponent* ABASWorkcellActor::ActiveFixture() const
-{
-    switch (Task)
-    {
-    case EBASTask::StowInDrawer: return CabinetRoot;
-    case EBASTask::CloseValve: return ValveRoot;
-    case EBASTask::InsertFilter: return ScrubberRoot;
-    case EBASTask::SealContainer: return ContainerRoot;
-    default: return nullptr;
-    }
-}
 
 UStaticMeshComponent* ABASWorkcellActor::ActiveHandle() const
 {
@@ -274,14 +277,18 @@ UStaticMeshComponent* ABASWorkcellActor::ActiveHandle() const
     }
 }
 
-bool ABASWorkcellActor::CanGraspObject() const
+bool ABASWorkcellActor::CanGrasp(const UStaticMeshComponent* Part) const
 {
-    switch (Task)
-    {
-    case EBASTask::InsertFilter: return !bCartridgeSeated;
-    case EBASTask::SealContainer: return !(bItemStowed && LidDeg < 30.0f);
-    default: return ActiveObject() != nullptr;
-    }
+    // Stowed items stay put once their drawer or lid is (nearly) shut; a seated cartridge is locked.
+    if (Part == Cartridge) return !bCartridgeSeated;
+    if (Part == Vial) return !(bVialStowed && LidDeg < 30.0f);
+    if (Part == Tool) return !(bToolStowed && DrawerOpenM < 0.05f);
+    return true;
+}
+
+FVector2D ABASWorkcellActor::Home(int32 Prop) const
+{
+    return HomeXY[Prop] + (Jitter.IsValidIndex(Prop) ? Jitter[Prop] : FVector2D::ZeroVector);
 }
 
 float ABASWorkcellActor::FingerStopFor(const UStaticMeshComponent* Part) const
@@ -371,23 +378,41 @@ void ABASWorkcellActor::Tick(float DeltaSeconds)
 
 void ABASWorkcellActor::TryGrasp()
 {
-    // Grasp proxy: closing fingers near an object (6 cm) or a handle (5 cm) take the nearest one.
+    // Grasp proxy: closing fingers take the nearest loose object (within 6 cm) or handle (within 5 cm),
+    // whatever the task, so a wrong choice by the policy really happens.
     const FVector GraspPoint = PandaRobot->GetGraspCenterWorld();
     const float Opening = PandaRobot->FingerOpeningCm;
-    UStaticMeshComponent* Object = CanGraspObject() ? ActiveObject() : nullptr;
-    UStaticMeshComponent* Handle = ActiveHandle();
-    const float ObjectDist = Object && Opening <= FingerStopFor(Object) + 0.2f ?
-        FVector::Dist(Object->GetComponentLocation(), GraspPoint) : TNumericLimits<float>::Max();
-    const float HandleDist = Handle && Opening <= HandleStopCm + 0.2f ?
-        FVector::Dist(Handle->GetComponentLocation(), GraspPoint) : TNumericLimits<float>::Max();
-    if (ObjectDist <= 6.0f && ObjectDist <= HandleDist)
+    UStaticMeshComponent* BestObject = nullptr;
+    float BestDist = 6.0f;
+    for (UStaticMeshComponent* Part : {PickCube.Get(), Tool.Get(), Cartridge.Get(), Vial.Get()})
     {
-        Grasp(Object);
+        const float Dist = FVector::Dist(Part->GetComponentLocation(), GraspPoint);
+        if (CanGrasp(Part) && Opening <= FingerStopFor(Part) + 0.2f && Dist <= BestDist)
+        {
+            BestObject = Part;
+            BestDist = Dist;
+        }
     }
-    else if (HandleDist <= 5.0f)
+    EBASHandle BestHandle = EBASHandle::None;
+    float HandleDist = FMath::Min(5.0f, BestDist);
+    const TPair<UStaticMeshComponent*, EBASHandle> Handles[] = {
+        {DrawerKnob.Get(), EBASHandle::Drawer}, {ValveLever.Get(), EBASHandle::Valve}, {LidTab.Get(), EBASHandle::Lid}};
+    for (const TPair<UStaticMeshComponent*, EBASHandle>& Handle : Handles)
     {
-        GripHandle(Task == EBASTask::StowInDrawer ? EBASHandle::Drawer :
-            Task == EBASTask::CloseValve ? EBASHandle::Valve : EBASHandle::Lid);
+        const float Dist = FVector::Dist(Handle.Key->GetComponentLocation(), GraspPoint);
+        if (Opening <= HandleStopCm + 0.2f && Dist < HandleDist)
+        {
+            BestHandle = Handle.Value;
+            HandleDist = Dist;
+        }
+    }
+    if (BestHandle != EBASHandle::None)
+    {
+        GripHandle(BestHandle);
+    }
+    else if (BestObject)
+    {
+        Grasp(BestObject);
     }
 }
 
@@ -502,7 +527,8 @@ void ABASWorkcellActor::Grasp(UStaticMeshComponent* Part)
         }
         HeldPart = Part;
         bObjectHeld = true;
-        bItemStowed = false;
+        bToolStowed &= Part != Tool;
+        bVialStowed &= Part != Vial;
         // Fingers stop on the object, so openness reads as in MuJoCo (0.62 for the 5 cm cube).
         PandaRobot->SetFingerStopCm(FingerStopFor(Part));
     }
@@ -544,7 +570,7 @@ void ABASWorkcellActor::OnObjectReleased(UStaticMeshComponent* Part)
         {
             SnapInto(Tool, DrawerRoot, FVector(FMath::Clamp(L.X, -MaxX + 0.01, MaxX - 0.01),
                 FMath::Clamp(L.Y, -MaxY + 0.01, MaxY - 0.01), DrawerFloorTop + ToolHalf.Z));
-            bItemStowed = true;
+            bToolStowed = true;
             return;
         }
     }
@@ -566,7 +592,7 @@ void ABASWorkcellActor::OnObjectReleased(UStaticMeshComponent* Part)
         {
             SnapInto(Vial, ContainerRoot, FVector(FMath::Clamp(L.X, -Max + 0.008, Max - 0.008),
                 FMath::Clamp(L.Y, -Max + 0.008, Max - 0.008), 0.006 + VialH / 2));
-            bItemStowed = true;
+            bVialStowed = true;
             return;
         }
     }
@@ -660,49 +686,42 @@ void ABASWorkcellActor::UpdateMechanisms()
     SetColour(ContainerLight, bLidLatched ? LitGreen : DimAmber);
 }
 
-void ABASWorkcellActor::ApplyTaskVisibility()
-{
-    TargetMarker->SetVisibility(Task == EBASTask::CubeToPad);
-    PickCube->SetVisibility(Task == EBASTask::CubeToPad);
-    CabinetRoot->SetVisibility(Task == EBASTask::StowInDrawer, true);
-    Tool->SetVisibility(Task == EBASTask::StowInDrawer);
-    ValveRoot->SetVisibility(Task == EBASTask::CloseValve, true);
-    ScrubberRoot->SetVisibility(Task == EBASTask::InsertFilter, true);
-    Cartridge->SetVisibility(Task == EBASTask::InsertFilter);
-    ContainerRoot->SetVisibility(Task == EBASTask::SealContainer, true);
-    Vial->SetVisibility(Task == EBASTask::SealContainer);
-}
 
 void ABASWorkcellActor::PlaceTaskProps()
 {
     const bool bPlaying = HasActorBegunPlay() || IsActorBeginningPlay();
-    const auto ResetObject = [this, bPlaying](UStaticMeshComponent* Part, double HalfHeight)
+    const auto ResetObject = [this, bPlaying](UStaticMeshComponent* Part, int32 Prop, double HalfHeight)
     {
         if (Part->GetAttachParent() != WorkcellRoot)
         {
             Part->AttachToComponent(WorkcellRoot, FAttachmentTransformRules::KeepWorldTransform);
         }
         SetFree(Part, false);
-        Part->SetRelativeLocationAndRotation(At(CubeStartXY, BenchZ + HalfHeight), FRotator::ZeroRotator);
-        if (bPlaying && Part == ActiveObject())
+        Part->SetVisibility(true);
+        Part->SetRelativeLocationAndRotation(At(Home(Prop), BenchZ + HalfHeight), FRotator::ZeroRotator);
+        if (bPlaying)
         {
             SetFree(Part, true);
         }
     };
+    ResetObject(PickCube, PCube, 0.025);
+    ResetObject(Tool, PTool, ToolHalf.Z);
+    ResetObject(Cartridge, PCartridge, CartridgeHalf.Z);
+    ResetObject(Vial, PVial, VialH / 2);
 
-    TargetMarker->SetRelativeLocation(At(MarkerXY, 0.3765));
-    ResetObject(PickCube, 0.025);
-    ResetObject(Tool, ToolHalf.Z);
-    ResetObject(Cartridge, CartridgeHalf.Z);
-    ResetObject(Vial, VialH / 2);
-    for (USceneComponent* Fixture : {CabinetRoot.Get(), ValveRoot.Get(), ScrubberRoot.Get(), ContainerRoot.Get()})
+    TargetMarker->SetVisibility(true);
+    TargetMarker->SetRelativeLocation(At(Home(PPad), 0.3765));
+    const TPair<USceneComponent*, int32> Fixtures[] = {
+        {CabinetRoot.Get(), PCabinet}, {ValveRoot.Get(), PValve}, {ScrubberRoot.Get(), PScrubber}, {ContainerRoot.Get(), PContainer}};
+    for (const TPair<USceneComponent*, int32>& Fixture : Fixtures)
     {
-        Fixture->SetRelativeLocation(At(MarkerXY, BenchZ));
+        Fixture.Key->SetVisibility(true, true);
+        Fixture.Key->SetRelativeLocation(At(Home(Fixture.Value), BenchZ));
     }
     DrawerOpenM = 0.0f;
     ValveDeg = 0.0f;
     LidDeg = 90.0f;
-    bItemStowed = bCartridgeSeated = bLidLatched = false;
+    bToolStowed = bVialStowed = bCartridgeSeated = bLidLatched = false;
     UpdateMechanisms();
 }
 
@@ -717,48 +736,15 @@ void ABASWorkcellActor::ResetTask()
         ReleaseHandle();
     }
     HeldHandle = EBASHandle::None;
-    ApplyTaskVisibility();
     PlaceTaskProps();
 }
 
 void ABASWorkcellActor::RandomizeLayout(FRandomStream& Stream)
 {
-    const auto In = [&Stream](double XLo, double XHi, double YLo, double YHi)
+    Jitter.SetNum(PropCount);
+    for (FVector2D& Shift : Jitter)
     {
-        return FVector2D(Stream.FRandRange(XLo, XHi), Stream.FRandRange(YLo, YHi));
-    };
-    switch (Task)
-    {
-    case EBASTask::CubeToPad:
-        // Ranges from README / closed_loop_panda: cube x 0.40-0.49, y +-0.10; marker x 0.57-0.66, y +-0.20.
-        do
-        {
-            CubeStartXY = FVector2D(Stream.FRandRange(0.40, 0.49), Stream.FRandRange(-0.10, 0.10));
-            MarkerXY = FVector2D(Stream.FRandRange(0.57, 0.66), Stream.FRandRange(-0.20, 0.20));
-        } while (FVector2D::Distance(CubeStartXY, MarkerXY) < 0.13);
-        break;
-    case EBASTask::StowInDrawer:
-        // Cabinet on the right, drawer opening towards +y; tool on the left, clear of the open drawer.
-        MarkerXY = In(0.52, 0.60, -0.16, -0.12);
-        CubeStartXY = In(0.40, 0.47, 0.09, 0.15);
-        break;
-    case EBASTask::CloseValve:
-        MarkerXY = In(0.52, 0.62, -0.12, 0.12);
-        break;
-    case EBASTask::InsertFilter:
-        do
-        {
-            CubeStartXY = In(0.40, 0.47, -0.10, 0.10);
-            MarkerXY = In(0.58, 0.64, -0.14, 0.14);
-        } while (FVector2D::Distance(CubeStartXY, MarkerXY) < 0.14);
-        break;
-    case EBASTask::SealContainer:
-        do
-        {
-            CubeStartXY = In(0.40, 0.47, -0.12, 0.12);
-            MarkerXY = In(0.57, 0.63, -0.14, 0.14);
-        } while (FVector2D::Distance(CubeStartXY, MarkerXY) < 0.13);
-        break;
+        Shift = FVector2D(Stream.FRandRange(-LayoutJitterM, LayoutJitterM), Stream.FRandRange(-LayoutJitterM, LayoutJitterM));
     }
 }
 
@@ -789,12 +775,15 @@ FVector ABASWorkcellActor::GetTargetMujoco() const
     switch (Task)
     {
     case EBASTask::StowInDrawer:
+    {
         // Middle of the exposed drawer floor when fully open.
-        return FVector(MarkerXY.X, MarkerXY.Y + CabinetHalf.Y + DrawerMaxOpen / 2, BenchZ + DrawerFloorTop);
+        const FVector2D Cabinet = Home(PCabinet);
+        return FVector(Cabinet.X, Cabinet.Y + CabinetHalf.Y + DrawerMaxOpen / 2, BenchZ + DrawerFloorTop);
+    }
     case EBASTask::CloseValve: return ToMujoco(ValveLever->GetComponentLocation());
-    case EBASTask::InsertFilter: return FVector(MarkerXY.X, MarkerXY.Y, BenchZ + 2 * ScrubberHalf.Z);
-    case EBASTask::SealContainer: return FVector(MarkerXY.X, MarkerXY.Y, BenchZ + 0.006);
-    default: return FVector(MarkerXY.X, MarkerXY.Y, 0.377);
+    case EBASTask::InsertFilter: return FVector(Home(PScrubber).X, Home(PScrubber).Y, BenchZ + 2 * ScrubberHalf.Z);
+    case EBASTask::SealContainer: return FVector(Home(PContainer).X, Home(PContainer).Y, BenchZ + 0.006);
+    default: return FVector(Home(PPad).X, Home(PPad).Y, 0.377);
     }
 }
 
@@ -817,7 +806,8 @@ void ABASWorkcellActor::GetTaskState(TMap<FString, double>& Out) const
     Out.Add(TEXT("drawer_open"), DrawerOpenM);
     Out.Add(TEXT("valve_deg"), ValveDeg);
     Out.Add(TEXT("lid_deg"), LidDeg);
-    Out.Add(TEXT("stowed"), bItemStowed ? 1.0 : 0.0);
+    Out.Add(TEXT("tool_stowed"), bToolStowed ? 1.0 : 0.0);
+    Out.Add(TEXT("vial_stowed"), bVialStowed ? 1.0 : 0.0);
     Out.Add(TEXT("seated"), bCartridgeSeated ? 1.0 : 0.0);
     Out.Add(TEXT("latched"), bLidLatched ? 1.0 : 0.0);
 }
@@ -829,10 +819,10 @@ bool ABASWorkcellActor::IsTaskSuccess() const
     switch (Task)
     {
     case EBASTask::CubeToPad: return bHandsFree && IsCubePlaced();
-    case EBASTask::StowInDrawer: return bHandsFree && bItemStowed && DrawerOpenM <= 0.001f;
+    case EBASTask::StowInDrawer: return bHandsFree && bToolStowed && DrawerOpenM <= 0.001f;
     case EBASTask::CloseValve: return bHandsFree && FMath::Abs(ValveDeg) >= 89.0f;
     case EBASTask::InsertFilter: return bHandsFree && bCartridgeSeated;
-    case EBASTask::SealContainer: return bHandsFree && bItemStowed && bLidLatched;
+    case EBASTask::SealContainer: return bHandsFree && bVialStowed && bLidLatched;
     }
     return false;
 }
@@ -850,7 +840,6 @@ bool ABASWorkcellActor::IsCubePlaced() const
 void ABASWorkcellActor::OnConstruction(const FTransform& Transform)
 {
     Super::OnConstruction(Transform);
-    ApplyTaskVisibility();
     PlaceTaskProps();
 
     SetColour(RobotMount, FLinearColor(0.30f, 0.33f, 0.38f));

@@ -37,18 +37,17 @@ void ABASPolicyCameraActor::OnConstruction(const FTransform& Transform)
 {
     Super::OnConstruction(Transform);
 
-    // MuJoCo free camera: lookat (0.50, 0, 0.46) m, distance 0.75 m,
-    // azimuth 90 deg, elevation -15 deg. UE uses cm and its OBJ import
-    // reflects Y; both camera and target have Y=0 here.
-    const FVector LookAtCm(50.0, 0.0, 46.0);
-    const FVector CameraCm(50.0 + 75.0 * FMath::Cos(FMath::DegreesToRadians(15.0)),
-        0.0, 46.0 + 75.0 * FMath::Sin(FMath::DegreesToRadians(15.0)));
+    // Orbit pose as a MuJoCo free camera (azimuth 90: looking back at the robot along -x). UE uses cm and
+    // its OBJ import reflects Y; camera and target both have Y=0 here.
+    const FVector LookAtCm = LookAtM * 100.0;
+    const float Elevation = FMath::DegreesToRadians(ElevationDeg);
+    const FVector CameraCm = LookAtCm + 100.0 * DistanceM * FVector(FMath::Cos(Elevation), 0.0, FMath::Sin(Elevation));
     const FRotator CameraRotation = FRotationMatrix::MakeFromXZ(
         LookAtCm - CameraCm, FVector::UpVector).Rotator();
 
-    // MuJoCo's scene uses 45 deg vertical FOV. UE camera FOV is horizontal.
+    // UE camera FOV is horizontal; the frame is 4:3.
     const float HorizontalFov = FMath::RadiansToDegrees(2.0f * FMath::Atan(
-        (4.0f / 3.0f) * FMath::Tan(FMath::DegreesToRadians(45.0f) / 2.0f)));
+        (4.0f / 3.0f) * FMath::Tan(FMath::DegreesToRadians(VerticalFovDeg) / 2.0f)));
     PreviewCamera->SetRelativeLocationAndRotation(CameraCm, CameraRotation);
     PreviewCamera->SetFieldOfView(HorizontalFov);
     ObservationCapture->SetRelativeLocationAndRotation(CameraCm, CameraRotation);

@@ -10,7 +10,7 @@ class USceneComponent;
 class UStaticMeshComponent;
 class APandaRobotActor;
 
-/** The five station tasks; only the active task's props are visible. */
+/** The five station tasks. All props are always on the bench; the task picks instruction, success check and expert. */
 UENUM(BlueprintType)
 enum class EBASTask : uint8
 {
@@ -46,19 +46,15 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "BAS Workcell|Task")
     EBASTask Task = EBASTask::CubeToPad;
 
-    /** Loose object start (cube, tool, cartridge, vial), MuJoCo metres (x forward, y left). */
-    UPROPERTY(EditAnywhere, Category = "BAS Workcell|Task")
-    FVector2D CubeStartXY = FVector2D(0.45, 0.0);
+    /** Each prop sits at a fixed home spot, shifted by up to this much (m, per axis) by RandomizeLayout. */
+    UPROPERTY(EditAnywhere, Category = "BAS Workcell|Task", meta = (ClampMin = "0.0", ClampMax = "0.03"))
+    float LayoutJitterM = 0.02f;
 
-    /** Target or fixture centre: marker, drawer cabinet, valve, scrubber, container. */
-    UPROPERTY(EditAnywhere, Category = "BAS Workcell|Task")
-    FVector2D MarkerXY = FVector2D(0.60, 0.0);
-
-    /** Show the active task's props at the layout above, with mechanisms in their start state. */
+    /** Put every prop at its home spot (plus the current jitter), mechanisms in their start state. */
     UFUNCTION(CallInEditor, BlueprintCallable, Category = "BAS Workcell|Task")
     void ResetTask();
 
-    /** Random layout for the active task, inside the reachable, visible bench area. */
+    /** New random shift of every prop around its home spot. */
     void RandomizeLayout(FRandomStream& Stream);
 
     FString GetTaskInstruction() const;
@@ -93,9 +89,11 @@ public:
     UPROPERTY(VisibleInstanceOnly, Category = "BAS Workcell|State")
     float LidDeg = 90.0f;
 
-    /** Tool resting in the drawer (task 2) or vial in the container (task 5). */
     UPROPERTY(VisibleInstanceOnly, Category = "BAS Workcell|State")
-    bool bItemStowed = false;
+    bool bToolStowed = false;
+
+    UPROPERTY(VisibleInstanceOnly, Category = "BAS Workcell|State")
+    bool bVialStowed = false;
 
     UPROPERTY(VisibleInstanceOnly, Category = "BAS Workcell|State")
     bool bCartridgeSeated = false;
@@ -205,13 +203,12 @@ private:
     TObjectPtr<UStaticMeshComponent> HeldPart;
 
     UStaticMeshComponent* ActiveObject() const;
-    USceneComponent* ActiveFixture() const;
     UStaticMeshComponent* ActiveHandle() const;
-    bool CanGraspObject() const;
+    bool CanGrasp(const UStaticMeshComponent* Part) const;
+    FVector2D Home(int32 Prop) const;
     float FingerStopFor(const UStaticMeshComponent* Part) const;
     FVector ToMujoco(const FVector& World) const;
     FVector LocalMujoco(const USceneComponent* Frame, const FVector& World) const;
-    void ApplyTaskVisibility();
     void PlaceTaskProps();
     void SetFree(UStaticMeshComponent* Part, bool bFree);
     void SnapInto(UStaticMeshComponent* Part, USceneComponent* Frame, const FVector& LocalMetres);
@@ -229,6 +226,8 @@ private:
     FVector GripStartMujoco = FVector::ZeroVector;
     float GripStartValue = 0.0f;
     float GripStartYaw = 0.0f;
+    UPROPERTY(Transient)
+    TArray<FVector2D> Jitter;
     int32 ScriptedPhase = -1;
     float ScriptedPhaseElapsed = 0.0f;
 };

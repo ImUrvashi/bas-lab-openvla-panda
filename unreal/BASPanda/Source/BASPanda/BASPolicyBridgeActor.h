@@ -58,7 +58,7 @@ public:
     UPROPERTY(EditAnywhere, Category = "BAS Policy Loop", meta = (ClampMin = "0.02"))
     float StepDurationSec = 0.1f;
 
-    /** Off: use the workcell's CubeStartXY/MarkerXY. On: random layouts from the training ranges. */
+    /** On: every episode shifts each prop around its home spot (workcell Layout Jitter M). */
     UPROPERTY(EditAnywhere, Category = "BAS Policy Loop")
     bool bRandomizeLayout = false;
 

@@ -80,7 +80,7 @@ The recipe is the same as `record_expert_demos.py`: correlated noise on the exec
 
 ## Five station tasks
 
-`BASWorkcellActor` → **Task** picks the task; only that task's props are shown (and seen by the policy camera).
+All props are always on one station bench, each at a fixed home spot; the policy camera (`LookAtM`, `DistanceM`, `ElevationDeg`) frames the whole bench. `BASWorkcellActor` → **Task** only picks the instruction, success check and (for recording) the expert. Any loose object can be grasped and any handle gripped, so a wrong choice by the policy really happens.
 Mechanisms are kinematic: a gripped handle drags its drawer, turns with the wrist (valve) or swings on its hinge (lid);
 an item released inside the drawer/container, or a cartridge released aligned over the slot, snaps in and moves with it.
 
@@ -92,7 +92,7 @@ an item released inside the drawer/container, or a cartridge released aligned ov
 | 4 | air scrubber with yellow-rimmed slot and light, teal cartridge | Insert the filter cartridge into the air scrubber. | cartridge seated (light green), hand free |
 | 5 | purple container with hinged lid and latch light, pink vial | Put the sample vial in the container and close the lid. | vial inside, lid latched (light green), hand free |
 
-`CubeStartXY` is the loose object's start, `MarkerXY` the target/fixture centre (MuJoCo metres). With **Randomize Layout**
-on the bridge, each episode draws a new layout for the selected task. The bridge sends the task's instruction (turn off
+Homes (MuJoCo metres): cabinet (0.47, −0.27), pad (0.64, −0.17), cube (0.45, −0.03), tool (0.45, 0.04), vial (0.53, −0.04), cartridge (0.53, 0.06), scrubber (0.64, 0.04), container (0.62, 0.22), valve (0.44, 0.24). With **Randomize Layout**
+on the bridge, each episode shifts every prop by up to `LayoutJitterM` (2 cm) around its home. The bridge sends the task's instruction (turn off
 **Use Task Instruction** to send its own), plus `task`, `cube_pos` (active object), `target_pos` and a `state` object
-(object/target/handle positions, drawer_open, valve_deg, lid_deg, stowed, seated, latched). Expert recording is task 1 only for now.
+(object/target/handle positions, drawer_open, valve_deg, lid_deg, tool_stowed, vial_stowed, seated, latched). Expert recording is task 1 only for now.
