@@ -20,10 +20,10 @@ public:
     ABASPolicyCameraActor();
     virtual void OnConstruction(const FTransform& Transform) override;
 
-    /** Capture one 224x224 raw RGB observation for the local policy protocol. */
+    /** Capture one 320x240 raw RGB frame, as MuJoCo renders; the gateway resizes it to 224x224. */
     bool CaptureRGB(TArray<uint8>& OutRGB, FString& OutError);
 
-    /** Assign a 320x240 render target when the observation bridge is ready. */
+    /** Optional 320x240 render target; a transient one is created if empty. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "BAS Policy Camera")
     TObjectPtr<UTextureRenderTarget2D> ObservationTarget;
 

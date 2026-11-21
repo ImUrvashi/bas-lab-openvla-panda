@@ -62,12 +62,12 @@ bool ABASPolicyCameraActor::CaptureRGB(TArray<uint8>& OutRGB, FString& OutError)
     {
         ObservationTarget = NewObject<UTextureRenderTarget2D>(this, TEXT("TransientPolicyObservation"));
         ObservationTarget->RenderTargetFormat = RTF_RGBA8;
-        ObservationTarget->InitAutoFormat(224, 224);
+        ObservationTarget->InitAutoFormat(320, 240);
         ObservationTarget->UpdateResourceImmediate(true);
     }
-    if (ObservationTarget->SizeX != 224 || ObservationTarget->SizeY != 224)
+    if (ObservationTarget->SizeX != 320 || ObservationTarget->SizeY != 240)
     {
-        OutError = TEXT("Observation target must be 224x224 pixels");
+        OutError = TEXT("Observation target must be 320x240 pixels");
         return false;
     }
     ObservationCapture->TextureTarget = ObservationTarget;
@@ -75,7 +75,7 @@ bool ABASPolicyCameraActor::CaptureRGB(TArray<uint8>& OutRGB, FString& OutError)
 
     TArray<FColor> Pixels;
     FTextureRenderTargetResource* Resource = ObservationTarget->GameThread_GetRenderTargetResource();
-    if (!Resource || !Resource->ReadPixels(Pixels) || Pixels.Num() != 224 * 224)
+    if (!Resource || !Resource->ReadPixels(Pixels) || Pixels.Num() != 320 * 240)
     {
         OutError = TEXT("Scene capture readback failed");
         return false;

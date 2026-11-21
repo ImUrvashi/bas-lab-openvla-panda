@@ -175,7 +175,7 @@ bool ABASPolicyBridgeActor::SendObservation()
     TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
     Payload->SetStringField(TEXT("instruction"), Instruction);
     Payload->SetStringField(TEXT("image_b64"), FBase64::Encode(RGB.GetData(), RGB.Num()));
-    Payload->SetArrayField(TEXT("shape"), JsonNumbers({224, 224, 3}));
+    Payload->SetArrayField(TEXT("shape"), JsonNumbers({240, 320, 3}));
     if (Panda && Panda->ArmJointsRad.Num() == 7)
     {
         TArray<TSharedPtr<FJsonValue>> Joints;

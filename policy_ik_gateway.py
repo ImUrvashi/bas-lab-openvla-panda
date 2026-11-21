@@ -26,9 +26,10 @@ import numpy as np
 from demo_recorder import DemoRecorder
 from expert_policy import ExpertPolicy
 from openvla_adapter import PandaKinematics, decode_action
+from panda_openvla_dataset import resize_image
 
 
-IMAGE_SHAPE = [224, 224, 3]
+IMAGE_SHAPES = ([224, 224, 3], [240, 320, 3])  # 320x240 = MuJoCo render, resized here as in training
 MAX_BODY_BYTES = 1_000_000
 MAX_HAND_STEP_M = 0.03
 MAX_JOINT_STEP_RAD = 0.15
@@ -49,14 +50,18 @@ def validate_request(request):
         raise ValueError("request must be a JSON object")
     if not isinstance(request.get("instruction"), str) or not request["instruction"].strip():
         raise ValueError("instruction must be nonempty text")
-    if request.get("shape") != IMAGE_SHAPE:
-        raise ValueError("shape must be [224, 224, 3]")
+    shape = request.get("shape")
+    if shape not in IMAGE_SHAPES:
+        raise ValueError("shape must be [224, 224, 3] or [240, 320, 3]")
     try:
         rgb = base64.b64decode(request["image_b64"], validate=True)
     except (KeyError, TypeError, binascii.Error) as exc:
         raise ValueError("image_b64 must contain base64 RGB bytes") from exc
-    if len(rgb) != 224 * 224 * 3:
-        raise ValueError("image_b64 must contain 224x224 raw RGB bytes")
+    if len(rgb) != math.prod(shape):
+        raise ValueError(f"image_b64 must contain {shape[1]}x{shape[0]} raw RGB bytes")
+    if shape != [224, 224, 3]:
+        rgb = resize_image(np.frombuffer(rgb, np.uint8).reshape(shape)).tobytes()
+        request["image_b64"], request["shape"] = base64.b64encode(rgb).decode(), [224, 224, 3]
     joints = finite_vector(request.get("joints_rad"), 7, "joints_rad")
     opening = request.get("gripper_opening")
     if (not isinstance(opening, (int, float)) or isinstance(opening, bool) or
