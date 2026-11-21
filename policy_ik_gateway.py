@@ -27,6 +27,7 @@ from demo_recorder import DemoRecorder
 from expert_policy import ExpertPolicy
 from openvla_adapter import PandaKinematics, decode_action
 from panda_openvla_dataset import resize_image
+from PIL import Image
 
 
 IMAGE_SHAPES = ([224, 224, 3], [240, 320, 3])  # 320x240 = MuJoCo render, resized here as in training
@@ -111,6 +112,7 @@ def convert_action(kin, joints, opening, action):
 class GatewayHandler(BaseHTTPRequestHandler):
     kin = None
     upstream_url = None
+    save_image = None
     policy = "sample"
     expert = None
     expert_episode = None
@@ -144,6 +146,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 raise ValueError("invalid request size")
             request = json.loads(self.rfile.read(length))
             joints, opening, rgb = validate_request(request)
+            if self.save_image:     # the exact 224x224 frame the policy sees
+                Image.fromarray(np.frombuffer(rgb, np.uint8).reshape(224, 224, 3)).save(self.save_image)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             return self.send_json(400, {"error": str(exc)})
 
@@ -183,10 +187,12 @@ def main():
     parser.add_argument("--upstream-url", help="OpenVLA POST /act endpoint (overrides --policy)")
     parser.add_argument("--record", help="expert mode: save DART demonstrations to this folder")
     parser.add_argument("--seed", type=int, default=1, help="recording noise seed (one manifest per seed)")
+    parser.add_argument("--save-image", help="overwrite this PNG with every observation (camera check)")
     args = parser.parse_args()
     GatewayHandler.kin = PandaKinematics()
     GatewayHandler.upstream_url = args.upstream_url
     GatewayHandler.policy = args.policy
+    GatewayHandler.save_image = args.save_image
     if args.record:
         if args.upstream_url or args.policy != "expert":
             parser.error("--record needs --policy expert")
