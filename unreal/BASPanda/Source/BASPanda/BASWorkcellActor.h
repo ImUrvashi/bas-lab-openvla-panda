@@ -48,7 +48,7 @@ public:
 
     /** Each prop sits at a fixed home spot, shifted by up to this much (m, per axis) by RandomizeLayout. */
     UPROPERTY(EditAnywhere, Category = "BAS Workcell|Task", meta = (ClampMin = "0.0", ClampMax = "0.03"))
-    float LayoutJitterM = 0.02f;
+    float LayoutJitterM = 0.01f;
 
     /** Put every prop at its home spot (plus the current jitter), mechanisms in their start state. */
     UFUNCTION(CallInEditor, BlueprintCallable, Category = "BAS Workcell|Task")

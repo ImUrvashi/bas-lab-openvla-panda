@@ -48,7 +48,7 @@ namespace
     constexpr double LeverZ = 0.105;
 
     // Task 4: scrubber top at 8 cm with a slot; a seated cartridge sticks out 2 cm.
-    const FVector ScrubberHalf(0.06, 0.07, 0.04);
+    const FVector ScrubberHalf(0.05, 0.065, 0.04);
     const FVector CartridgeHalf(0.0125, 0.03, 0.04);
     constexpr double SeatedCartridgeZ = 2 * 0.04 - 0.06 + 0.04;
 
@@ -59,16 +59,17 @@ namespace
 
     // One station bench: every prop has a home spot (MuJoCo metres), all inside reach and the policy camera view.
     enum EProp { PCube, PPad, PTool, PCabinet, PVial, PCartridge, PScrubber, PContainer, PValve, PropCount };
+    // Loose items sit in one row at x 0.55, in front of the arm's home pose (which hides x < 0.52 near y = 0).
     const FVector2D HomeXY[PropCount] = {
-        {0.45, -0.03},  // red cube (staging row)
-        {0.64, -0.17},  // yellow processing pad
-        {0.45, 0.04},   // tool (staging row)
-        {0.47, -0.27},  // cabinet; drawer opens towards +y
-        {0.53, -0.04},  // sample vial
-        {0.53, 0.06},   // filter cartridge
-        {0.64, 0.04},   // air scrubber
-        {0.62, 0.22},   // sample container, lid hinged on its robot side
-        {0.44, 0.24},   // coolant valve on a pipe along y
+        {0.555, -0.125}, // red cube
+        {0.66, -0.17},  // yellow processing pad (front left)
+        {0.55, -0.04},  // tool
+        {0.44, -0.27},  // cabinet (back left); drawer opens towards +y
+        {0.55, 0.04},   // sample vial
+        {0.55, 0.12},   // filter cartridge
+        {0.66, 0.02},   // air scrubber (front centre)
+        {0.64, 0.21},   // sample container (front right), lid hinged on its robot side
+        {0.45, 0.25},   // coolant valve (back right) on a pipe along y
     };
 
     // MuJoCo metres (y left) -> Unreal centimetres (y right): the one place this flip happens.

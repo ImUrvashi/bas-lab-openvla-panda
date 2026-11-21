@@ -92,7 +92,7 @@ an item released inside the drawer/container, or a cartridge released aligned ov
 | 4 | air scrubber with yellow-rimmed slot and light, teal cartridge | Insert the filter cartridge into the air scrubber. | cartridge seated (light green), hand free |
 | 5 | purple container with hinged lid and latch light, pink vial | Put the sample vial in the container and close the lid. | vial inside, lid latched (light green), hand free |
 
-Homes (MuJoCo metres): cabinet (0.47, −0.27), pad (0.64, −0.17), cube (0.45, −0.03), tool (0.45, 0.04), vial (0.53, −0.04), cartridge (0.53, 0.06), scrubber (0.64, 0.04), container (0.62, 0.22), valve (0.44, 0.24). With **Randomize Layout**
-on the bridge, each episode shifts every prop by up to `LayoutJitterM` (2 cm) around its home. The bridge sends the task's instruction (turn off
+Homes (MuJoCo metres): loose items in a row at x 0.55 in front of the arm (cube y −0.125, tool −0.04, vial 0.04, cartridge 0.12); cabinet (0.44, −0.27), valve (0.45, 0.25), pad (0.66, −0.17), scrubber (0.66, 0.02), container (0.64, 0.21). With **Randomize Layout**
+on the bridge, each episode shifts every prop by up to `LayoutJitterM` (1 cm) around its home. The bridge sends the task's instruction (turn off
 **Use Task Instruction** to send its own), plus `task`, `cube_pos` (active object), `target_pos` and a `state` object
 (object/target/handle positions, drawer_open, valve_deg, lid_deg, tool_stowed, vial_stowed, seated, latched). Expert recording is task 1 only for now.
