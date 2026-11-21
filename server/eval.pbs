@@ -1,0 +1,11 @@
+#!/bin/bash
+#PBS -N vla_eval
+#PBS -q GPU_only
+#PBS -l select=1:ncpus=8:mem=48gb
+#PBS -l walltime=04:00:00
+#PBS -j oe
+# qsub -v GPU=1,FRAMES=datasets/val_frames.npz,OUT=logs/eval.json eval.pbs   (scores every checkpoint + the base adapter)
+source /data/urvashib/openvla_panda/code/server/env.sh
+export CUDA_VISIBLE_DEVICES=${GPU:-1}
+python panda_tests/eval_checkpoints.py --frames $ROOT/${FRAMES:?set FRAMES} --out $ROOT/${OUT:-logs/eval.json} \
+    --adapters $ROOT/weights/side_v12_step2500/lora_adapter $ROOT/runs/*/checkpoints/step_*/lora_adapter
