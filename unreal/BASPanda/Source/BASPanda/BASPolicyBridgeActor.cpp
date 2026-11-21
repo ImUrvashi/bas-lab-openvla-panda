@@ -196,6 +196,14 @@ bool ABASPolicyBridgeActor::SendObservation()
         Payload->SetArrayField(TEXT("cube_pos"), JsonNumbers({Object.X, Object.Y, Object.Z}));
         Payload->SetArrayField(TEXT("marker_xy"), JsonNumbers({Target.X, Target.Y}));
         Payload->SetArrayField(TEXT("target_pos"), JsonNumbers({Target.X, Target.Y, Target.Z}));
+        TMap<FString, double> State;
+        Workcell->GetTaskState(State);
+        TSharedRef<FJsonObject> StateJson = MakeShared<FJsonObject>();
+        for (const TPair<FString, double>& Entry : State)
+        {
+            StateJson->SetNumberField(Entry.Key, Entry.Value);
+        }
+        Payload->SetObjectField(TEXT("state"), StateJson);
     }
     Payload->SetNumberField(TEXT("episode"), Episode);
     Payload->SetNumberField(TEXT("step"), Step);

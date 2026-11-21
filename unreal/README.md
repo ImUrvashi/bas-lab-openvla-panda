@@ -78,16 +78,21 @@ The success rule matches `closed_loop_panda.py`: the cube is released on the mar
 
 The recipe is the same as `record_expert_demos.py`: correlated noise on the executed motion, with the clean expert action stored as the label, and 10% of episodes without noise. When the gateway sends phases, the bridge ends an episode only after the expert reaches DONE, so the recordings include the retreat. `demonstrations*/` and `panda_openvla_data*/` are Git-ignored.
 
-## Five bench tasks
+## Five station tasks
 
 `BASWorkcellActor` → **Task** picks the task; only that task's props are shown (and seen by the policy camera).
+Mechanisms are kinematic: a gripped handle drags its drawer, turns with the wrist (valve) or swings on its hinge (lid);
+an item released inside the drawer/container, or a cartridge released aligned over the slot, snaps in and moves with it.
 
 | Task | Props | Instruction | Success |
 |---|---|---|---|
 | 1 | red cube, yellow marker | Pick up the red cube and place it on the yellow marker. | cube on marker, released |
-| 2 | orange canister, dark dock with green centre | Move the sample canister to the analysis dock. | canister within 2.5 cm of dock centre, upright (< 15°), released |
-| 3 | navy tool case, open storage tray | Put the tool case in the storage tray. | case inside the tray walls, released |
-| 4 | red and blue samples, red and blue pads | Put the red/blue sample on the red/blue pad. | named sample on its pad, other sample not moved |
-| 5 | console with green and red buttons and lights | Press the green/red button on the control panel. | named button latched (its light turns on), other button not pressed, fingertips back up |
+| 2 | cabinet with drawer (orange front, dark knob), yellow tool | Put the tool in the drawer and close it. | tool in drawer, drawer shut, hand free |
+| 3 | coolant pipe, blue valve body, red quarter-turn lever, light | Close the coolant valve. | lever turned 90° (light green), hand free |
+| 4 | air scrubber with yellow-rimmed slot and light, teal cartridge | Insert the filter cartridge into the air scrubber. | cartridge seated (light green), hand free |
+| 5 | purple container with hinged lid and latch light, pink vial | Put the sample vial in the container and close the lid. | vial inside, lid latched (light green), hand free |
 
-Layout fields are MuJoCo metres: object start `CubeStartXY`, target `MarkerXY` (task 4: red sample/pad; `OtherObjectXY`/`OtherTargetXY` are blue). `TargetVariant` picks the sample (task 4) or button (task 5); `bSwapButtons` swaps the button sides. With **Randomize Layout** on the bridge, each episode draws a new layout and target for the selected task. The bridge sends the task's instruction (turn off **Use Task Instruction** to send its own) plus `task`, `cube_pos` (active object) and `target_pos`. Expert recording is task 1 only for now.
+`CubeStartXY` is the loose object's start, `MarkerXY` the target/fixture centre (MuJoCo metres). With **Randomize Layout**
+on the bridge, each episode draws a new layout for the selected task. The bridge sends the task's instruction (turn off
+**Use Task Instruction** to send its own), plus `task`, `cube_pos` (active object), `target_pos` and a `state` object
+(object/target/handle positions, drawer_open, valve_deg, lid_deg, stowed, seated, latched). Expert recording is task 1 only for now.

@@ -34,22 +34,28 @@ namespace
         {TEXT("Release cube"), {0, 0.12363692f, 0, -1.74907139f, 0, 1.87270772f, -0.7853f}, 1.0f, true},
     };
 
-    // Prop geometry in MuJoCo metres. Bench top is at z 0.375. Fingers close along x,
-    // so every graspable's narrow side faces x.
+    // Prop geometry in MuJoCo metres, relative to each fixture's root on the bench top (z 0.375).
+    // Fingers close along x, so every gripped part is 2.5 cm thick along x.
     constexpr double BenchZ = 0.375;
-    constexpr double CanisterR = 0.022, CanisterH = 0.08;
-    constexpr double DockR = 0.045, DockH = 0.006;
-    const FVector CaseHalf(0.02, 0.03, 0.015);
-    const FVector2D TrayHalf(0.06, 0.08);
-    constexpr double TrayFloorT = 0.004, TrayWall = 0.006, TrayWallH = 0.035;
-    constexpr double SampleR = 0.015, SampleH = 0.06;
-    constexpr double PadHalf = 0.04;
-    const FVector ConsoleHalf(0.05, 0.08, 0.02);
-    constexpr double ButtonR = 0.0125, ButtonH = 0.012, ButtonSideY = 0.045, ButtonBackX = -0.01, LightFrontX = 0.03;
-    constexpr double ButtonTop = BenchZ + 2 * 0.02 + ButtonH;
-    constexpr float ButtonTravelCm = 0.8f, ButtonLatchCm = 0.6f, ButtonCatchCm = 1.6f;
-    // The fingertips reach about 2 cm below the grasp centre between the pads.
-    constexpr float FingertipBelowGraspCm = 2.0f;
+    constexpr float HandleStopCm = 1.25f;
+
+    // Task 2: cabinet body; the drawer slides out of its +y face by up to 11 cm.
+    const FVector CabinetHalf(0.08, 0.07, 0.045);
+    constexpr double DrawerMaxOpen = 0.11, DrawerFloorTop = 0.016, DrawerInner = 0.056;
+    const FVector ToolHalf(0.0125, 0.03, 0.012);
+
+    // Task 3: lever 10.5 cm above the bench, along the pipe (y) when open, across it (x) when closed.
+    constexpr double LeverZ = 0.105;
+
+    // Task 4: scrubber top at 8 cm with a slot; a seated cartridge sticks out 2 cm.
+    const FVector ScrubberHalf(0.06, 0.07, 0.04);
+    const FVector CartridgeHalf(0.0125, 0.03, 0.04);
+    constexpr double SeatedCartridgeZ = 2 * 0.04 - 0.06 + 0.04;
+
+    // Task 5: open-top container 10 x 10 x 6 cm; lid hinged on its robot-side (-x) top edge.
+    constexpr double ContainerHalf = 0.05, ContainerH = 0.06, ContainerInner = 0.044;
+    const FVector LidHinge(-0.05, 0.0, 0.06);
+    constexpr double VialR = 0.015, VialH = 0.05;
 
     // MuJoCo metres (y left) -> Unreal centimetres (y right): the one place this flip happens.
     FVector MujocoToUnrealCm(const FVector& Metres)
@@ -62,7 +68,7 @@ namespace
         return MujocoToUnrealCm(FVector(XY.X, XY.Y, Z));
     }
 
-    // Engine/BasicShapes/Cube and Cylinder are 100 cm across; sizes below are in metres.
+    // Engine/BasicShapes/Cube is 100 cm on each side. Sizes are half-extents in metres.
     void ConfigureBox(UStaticMeshComponent* Part, UStaticMesh* CubeMesh,
         const FVector& PositionMetres, const FVector& HalfSizeMetres, bool bCollides)
     {
@@ -70,13 +76,6 @@ namespace
         Part->SetRelativeLocation(PositionMetres * 100.0);
         Part->SetRelativeScale3D(HalfSizeMetres * 2.0);
         Part->SetCollisionEnabled(bCollides ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
-    }
-
-    void ConfigureCylinder(UStaticMeshComponent* Part, UStaticMesh* CylinderMesh, double Radius, double Height)
-    {
-        Part->SetStaticMesh(CylinderMesh);
-        Part->SetRelativeScale3D(FVector(2 * Radius, 2 * Radius, Height));
-        Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     }
 
     void SetColour(UStaticMeshComponent* Part, const FLinearColor& Value)
@@ -96,8 +95,8 @@ namespace
         Material->SetVectorParameterValue(TEXT("Color"), Value);
     }
 
-    const FLinearColor GreenDim(0.02f, 0.10f, 0.03f), GreenLit(0.25f, 1.0f, 0.3f);
-    const FLinearColor RedDim(0.12f, 0.02f, 0.02f), RedLit(1.0f, 0.2f, 0.1f);
+    const FLinearColor LitGreen(0.25f, 1.0f, 0.3f), DimGreen(0.03f, 0.12f, 0.05f);
+    const FLinearColor LitRed(1.0f, 0.12f, 0.05f), DimAmber(0.35f, 0.22f, 0.02f);
 }
 
 ABASWorkcellActor::ABASWorkcellActor()
@@ -108,77 +107,124 @@ ABASWorkcellActor::ABASWorkcellActor()
 
     UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
     UStaticMesh* CylinderMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-    const auto Make = [this](const TCHAR* Name)
+
+    const auto Root = [this](USceneComponent* Parent, const TCHAR* Name)
     {
-        UStaticMeshComponent* Part = CreateDefaultSubobject<UStaticMeshComponent>(Name);
-        Part->SetupAttachment(WorkcellRoot);
+        USceneComponent* Part = CreateDefaultSubobject<USceneComponent>(Name);
+        Part->SetupAttachment(Parent);
+        Part->SetMobility(EComponentMobility::Movable);
         return Part;
     };
+    // Visual prop part: position and half-size in metres relative to its parent fixture.
+    const auto Shape = [this](USceneComponent* Parent, const TCHAR* Name, UStaticMesh* Mesh, const FVector& Scale,
+        const FVector& Pos, const FLinearColor& Colour, const FRotator& Rotation = FRotator::ZeroRotator)
+    {
+        UStaticMeshComponent* Part = CreateDefaultSubobject<UStaticMeshComponent>(Name);
+        Part->SetupAttachment(Parent);
+        Part->SetMobility(EComponentMobility::Movable);
+        Part->SetStaticMesh(Mesh);
+        Part->SetRelativeLocationAndRotation(MujocoToUnrealCm(Pos), Rotation);
+        Part->SetRelativeScale3D(Scale);
+        Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        ColouredParts.Add(Part);
+        PartColours.Add(Colour);
+        return Part;
+    };
+    const auto Box = [&](USceneComponent* Parent, const TCHAR* Name, const FVector& Half, const FVector& Pos,
+        const FLinearColor& Colour)
+    {
+        return Shape(Parent, Name, CubeMesh, Half * 2.0, Pos, Colour);
+    };
+    const auto Cyl = [&](USceneComponent* Parent, const TCHAR* Name, double R, double H, const FVector& Pos,
+        const FLinearColor& Colour, const FRotator& Rotation = FRotator::ZeroRotator)
+    {
+        return Shape(Parent, Name, CylinderMesh, FVector(2 * R, 2 * R, H), Pos, Colour, Rotation);
+    };
 
-    RobotMount = Make(TEXT("RobotMount"));
+    RobotMount = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RobotMount"));
+    RobotMount->SetupAttachment(WorkcellRoot);
     ConfigureBox(RobotMount, CubeMesh, FVector(-0.05, 0, -0.515), FVector(0.25, 0.40, 0.515), true);
-    MountPlate = Make(TEXT("MountPlate"));
+    MountPlate = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MountPlate"));
+    MountPlate->SetupAttachment(WorkcellRoot);
     ConfigureBox(MountPlate, CubeMesh, FVector(0, 0, -0.015), FVector(0.20, 0.20, 0.015), false);
-    BenchRack = Make(TEXT("BenchRack"));
+    BenchRack = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BenchRack"));
+    BenchRack->SetupAttachment(WorkcellRoot);
     ConfigureBox(BenchRack, CubeMesh, FVector(0.55, 0, -0.3525), FVector(0.35, 0.40, 0.6775), true);
-    BenchTop = Make(TEXT("BenchTop"));
+    BenchTop = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BenchTop"));
+    BenchTop->SetupAttachment(WorkcellRoot);
     ConfigureBox(BenchTop, CubeMesh, FVector(0.55, 0, 0.35), FVector(0.35, 0.40, 0.025), true);
 
-    TargetMarker = Make(TEXT("TargetMarker"));
+    // Task 1
+    TargetMarker = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("TargetMarker"));
+    TargetMarker->SetupAttachment(WorkcellRoot);
     ConfigureBox(TargetMarker, CubeMesh, FVector(0.60, 0, 0.3765), FVector(0.05, 0.05, 0.0005), false);
-    PickCube = Make(TEXT("PickCube"));
+    PickCube = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PickCube"));
+    PickCube->SetupAttachment(WorkcellRoot);
     PickCube->SetMobility(EComponentMobility::Movable);
     ConfigureBox(PickCube, CubeMesh, FVector(0.45, 0, 0.40), FVector(0.025, 0.025, 0.025), true);
 
-    Canister = Make(TEXT("Canister"));
-    ConfigureCylinder(Canister, CylinderMesh, CanisterR, CanisterH);
-    Dock = Make(TEXT("AnalysisDock"));
-    ConfigureCylinder(Dock, CylinderMesh, DockR, DockH);
-    DockCentre = Make(TEXT("AnalysisDockCentre"));
-    ConfigureCylinder(DockCentre, CylinderMesh, 0.025, 0.001);
+    const FLinearColor Panel(0.55f, 0.60f, 0.68f), Dark(0.12f, 0.13f, 0.15f), Accent(0.95f, 0.45f, 0.05f);
 
-    ToolCase = Make(TEXT("ToolCase"));
-    ConfigureBox(ToolCase, CubeMesh, FVector::ZeroVector, CaseHalf, false);
-    TrayFloor = Make(TEXT("StorageTrayFloor"));
-    ConfigureBox(TrayFloor, CubeMesh, FVector::ZeroVector, FVector(TrayHalf.X, TrayHalf.Y, TrayFloorT / 2), false);
-    const FVector WallHalves[] = {
-        FVector(TrayWall / 2, TrayHalf.Y, TrayWallH / 2), FVector(TrayWall / 2, TrayHalf.Y, TrayWallH / 2),
-        FVector(TrayHalf.X, TrayWall / 2, TrayWallH / 2), FVector(TrayHalf.X, TrayWall / 2, TrayWallH / 2)};
-    for (int32 Index = 0; Index < 4; ++Index)
-    {
-        UStaticMeshComponent* Wall = Make(*FString::Printf(TEXT("StorageTrayWall%d"), Index));
-        ConfigureBox(Wall, CubeMesh, FVector::ZeroVector, WallHalves[Index], false);
-        TrayWalls.Add(Wall);
-    }
+    // Task 2: stowage cabinet, drawer (floor, walls, front, knob), loose tool.
+    CabinetRoot = Root(WorkcellRoot, TEXT("CabinetRoot"));
+    Box(CabinetRoot, TEXT("CabinetBody"), CabinetHalf, FVector(0, 0, CabinetHalf.Z), Panel);
+    DrawerRoot = Root(CabinetRoot, TEXT("DrawerRoot"));
+    Box(DrawerRoot, TEXT("DrawerFloor"), FVector(0.062, 0.062, 0.003), FVector(0, 0, 0.013), Dark);
+    Box(DrawerRoot, TEXT("DrawerSideL"), FVector(0.003, 0.062, 0.02), FVector(0.059, 0, 0.036), Panel);
+    Box(DrawerRoot, TEXT("DrawerSideR"), FVector(0.003, 0.062, 0.02), FVector(-0.059, 0, 0.036), Panel);
+    Box(DrawerRoot, TEXT("DrawerBack"), FVector(0.062, 0.003, 0.02), FVector(0, -0.059, 0.036), Panel);
+    Box(DrawerRoot, TEXT("DrawerFront"), FVector(0.075, 0.004, 0.042), FVector(0, 0.074, 0.045), Accent);
+    DrawerKnob = Box(DrawerRoot, TEXT("DrawerKnob"), FVector(0.0125, 0.012, 0.012), FVector(0, 0.074, 0.099), Dark);
+    Tool = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Tool"));
+    Tool->SetupAttachment(WorkcellRoot);
+    Tool->SetMobility(EComponentMobility::Movable);
+    ConfigureBox(Tool, CubeMesh, FVector::ZeroVector, ToolHalf, false);
 
-    RedSample = Make(TEXT("RedSample"));
-    ConfigureCylinder(RedSample, CylinderMesh, SampleR, SampleH);
-    BlueSample = Make(TEXT("BlueSample"));
-    ConfigureCylinder(BlueSample, CylinderMesh, SampleR, SampleH);
-    RedPad = Make(TEXT("RedPad"));
-    ConfigureBox(RedPad, CubeMesh, FVector::ZeroVector, FVector(PadHalf, PadHalf, 0.0005), false);
-    BluePad = Make(TEXT("BluePad"));
-    ConfigureBox(BluePad, CubeMesh, FVector::ZeroVector, FVector(PadHalf, PadHalf, 0.0005), false);
+    // Task 3: coolant pipe on two supports, valve body, stem, quarter-turn lever, status light.
+    ValveRoot = Root(WorkcellRoot, TEXT("ValveRoot"));
+    Cyl(ValveRoot, TEXT("CoolantPipe"), 0.015, 0.32, FVector(0, 0, 0.05), FLinearColor(0.7f, 0.72f, 0.75f),
+        FRotator(0, 0, 90));
+    Box(ValveRoot, TEXT("PipeSupportL"), FVector(0.012, 0.012, 0.025), FVector(0, 0.12, 0.025), Dark);
+    Box(ValveRoot, TEXT("PipeSupportR"), FVector(0.012, 0.012, 0.025), FVector(0, -0.12, 0.025), Dark);
+    Box(ValveRoot, TEXT("ValveBody"), FVector(0.03, 0.03, 0.03), FVector(0, 0, 0.05), FLinearColor(0.2f, 0.35f, 0.6f));
+    Cyl(ValveRoot, TEXT("ValveStem"), 0.006, 0.02, FVector(0, 0, 0.09), Dark);
+    ValveLeverRoot = Root(ValveRoot, TEXT("ValveLeverRoot"));
+    ValveLeverRoot->SetRelativeLocation(MujocoToUnrealCm(FVector(0, 0, LeverZ)));
+    ValveLever = Box(ValveLeverRoot, TEXT("ValveLever"), FVector(0.0125, 0.05, 0.0075), FVector::ZeroVector,
+        FLinearColor(0.85f, 0.1f, 0.08f));
+    Cyl(ValveLeverRoot, TEXT("ValveHub"), 0.012, 0.02, FVector::ZeroVector, Dark);
+    ValveLight = Cyl(ValveRoot, TEXT("ValveLight"), 0.008, 0.004, FVector(0.022, 0.022, 0.082), LitRed);
 
-    Console = Make(TEXT("ControlConsole"));
-    ConfigureBox(Console, CubeMesh, FVector::ZeroVector, ConsoleHalf, false);
-    GreenButton = Make(TEXT("GreenButton"));
-    ConfigureCylinder(GreenButton, CylinderMesh, ButtonR, ButtonH);
-    RedButton = Make(TEXT("RedButton"));
-    ConfigureCylinder(RedButton, CylinderMesh, ButtonR, ButtonH);
-    GreenLight = Make(TEXT("GreenLight"));
-    ConfigureCylinder(GreenLight, CylinderMesh, 0.008, 0.004);
-    RedLight = Make(TEXT("RedLight"));
-    ConfigureCylinder(RedLight, CylinderMesh, 0.008, 0.004);
+    // Task 4: air scrubber with a yellow-rimmed slot and seated light, loose filter cartridge.
+    ScrubberRoot = Root(WorkcellRoot, TEXT("ScrubberRoot"));
+    Box(ScrubberRoot, TEXT("ScrubberBody"), ScrubberHalf, FVector(0, 0, ScrubberHalf.Z), FLinearColor(0.75f, 0.8f, 0.9f));
+    Box(ScrubberRoot, TEXT("ScrubberSlotRim"), FVector(0.022, 0.04, 0.0008), FVector(0, 0, 0.0805),
+        FLinearColor(1.0f, 0.8f, 0.0f));
+    Box(ScrubberRoot, TEXT("ScrubberSlot"), FVector(0.016, 0.034, 0.001), FVector(0, 0, 0.081), FLinearColor(0.02f, 0.02f, 0.02f));
+    ScrubberLight = Cyl(ScrubberRoot, TEXT("ScrubberLight"), 0.008, 0.004, FVector(0.045, 0.05, 0.0815), DimGreen);
+    Cartridge = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("FilterCartridge"));
+    Cartridge->SetupAttachment(WorkcellRoot);
+    Cartridge->SetMobility(EComponentMobility::Movable);
+    ConfigureBox(Cartridge, CubeMesh, FVector::ZeroVector, CartridgeHalf, false);
 
-    for (UStaticMeshComponent* Part : {PickCube.Get(), Canister.Get(), ToolCase.Get(), RedSample.Get(), BlueSample.Get()})
-    {
-        Part->SetMobility(EComponentMobility::Movable);
-    }
-    for (UStaticMeshComponent* Part : {GreenButton.Get(), RedButton.Get()})
-    {
-        Part->SetMobility(EComponentMobility::Movable);
-    }
+    // Task 5: open container (floor + 4 walls), hinged lid with tab, latch light, loose vial.
+    ContainerRoot = Root(WorkcellRoot, TEXT("ContainerRoot"));
+    const FLinearColor Shell(0.55f, 0.45f, 0.75f);
+    Box(ContainerRoot, TEXT("ContainerFloor"), FVector(ContainerHalf, ContainerHalf, 0.003), FVector(0, 0, 0.003), Shell);
+    Box(ContainerRoot, TEXT("ContainerWallF"), FVector(0.003, ContainerHalf, ContainerH / 2), FVector(0.047, 0, ContainerH / 2), Shell);
+    Box(ContainerRoot, TEXT("ContainerWallB"), FVector(0.003, ContainerHalf, ContainerH / 2), FVector(-0.047, 0, ContainerH / 2), Shell);
+    Box(ContainerRoot, TEXT("ContainerWallL"), FVector(ContainerHalf, 0.003, ContainerH / 2), FVector(0, 0.047, ContainerH / 2), Shell);
+    Box(ContainerRoot, TEXT("ContainerWallR"), FVector(ContainerHalf, 0.003, ContainerH / 2), FVector(0, -0.047, ContainerH / 2), Shell);
+    LidRoot = Root(ContainerRoot, TEXT("LidHinge"));
+    LidRoot->SetRelativeLocation(MujocoToUnrealCm(LidHinge));
+    Box(LidRoot, TEXT("Lid"), FVector(ContainerHalf, ContainerHalf, 0.003), FVector(0.05, 0, 0.003), FLinearColor(0.75f, 0.68f, 0.9f));
+    LidTab = Box(LidRoot, TEXT("LidTab"), FVector(0.0125, 0.02, 0.01), FVector(0.09, 0, 0.013), Dark);
+    ContainerLight = Cyl(ContainerRoot, TEXT("LatchLight"), 0.007, 0.003, FVector(0.065, 0, 0.0015), DimAmber);
+    Vial = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SampleVial"));
+    Vial->SetupAttachment(WorkcellRoot);
+    Vial->SetMobility(EComponentMobility::Movable);
+    Vial->SetStaticMesh(CylinderMesh);
+    Vial->SetRelativeScale3D(FVector(2 * VialR, 2 * VialR, VialH));
 
     WorkcellLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("WorkcellLight"));
     WorkcellLight->SetupAttachment(WorkcellRoot);
@@ -193,59 +239,66 @@ ABASWorkcellActor::ABASWorkcellActor()
     WorkcellExposure->Settings.AutoExposureBias = -1.0f;
 }
 
-TArray<UStaticMeshComponent*> ABASWorkcellActor::TaskParts(EBASTask ForTask) const
-{
-    switch (ForTask)
-    {
-    case EBASTask::CubeToPad:
-        return {TargetMarker, PickCube};
-    case EBASTask::CanisterToDock:
-        return {Canister, Dock, DockCentre};
-    case EBASTask::ToolCaseToTray:
-    {
-        TArray<UStaticMeshComponent*> Parts = {ToolCase, TrayFloor};
-        for (UStaticMeshComponent* Wall : TrayWalls)
-        {
-            Parts.Add(Wall);
-        }
-        return Parts;
-    }
-    case EBASTask::SortSamples:
-        return {RedSample, BlueSample, RedPad, BluePad};
-    case EBASTask::PressButton:
-        return {Console, GreenButton, RedButton, GreenLight, RedLight};
-    }
-    return {};
-}
-
-TArray<UStaticMeshComponent*> ABASWorkcellActor::ActiveGraspables() const
+UStaticMeshComponent* ABASWorkcellActor::ActiveObject() const
 {
     switch (Task)
     {
-    case EBASTask::CubeToPad: return {PickCube};
-    case EBASTask::CanisterToDock: return {Canister};
-    case EBASTask::ToolCaseToTray: return {ToolCase};
-    case EBASTask::SortSamples: return {RedSample, BlueSample};
-    default: return {};
+    case EBASTask::CubeToPad: return PickCube;
+    case EBASTask::StowInDrawer: return Tool;
+    case EBASTask::InsertFilter: return Cartridge;
+    case EBASTask::SealContainer: return Vial;
+    default: return nullptr;
+    }
+}
+
+USceneComponent* ABASWorkcellActor::ActiveFixture() const
+{
+    switch (Task)
+    {
+    case EBASTask::StowInDrawer: return CabinetRoot;
+    case EBASTask::CloseValve: return ValveRoot;
+    case EBASTask::InsertFilter: return ScrubberRoot;
+    case EBASTask::SealContainer: return ContainerRoot;
+    default: return nullptr;
+    }
+}
+
+UStaticMeshComponent* ABASWorkcellActor::ActiveHandle() const
+{
+    switch (Task)
+    {
+    case EBASTask::StowInDrawer: return DrawerKnob;
+    case EBASTask::CloseValve: return ValveLever;
+    case EBASTask::SealContainer: return LidTab;
+    default: return nullptr;
+    }
+}
+
+bool ABASWorkcellActor::CanGraspObject() const
+{
+    switch (Task)
+    {
+    case EBASTask::InsertFilter: return !bCartridgeSeated;
+    case EBASTask::SealContainer: return !(bItemStowed && LidDeg < 30.0f);
+    default: return ActiveObject() != nullptr;
     }
 }
 
 float ABASWorkcellActor::FingerStopFor(const UStaticMeshComponent* Part) const
 {
-    // Each finger stops at half the object's width along x (as MuJoCo contact would).
-    if (Part == Canister) return 100.0f * CanisterR;
-    if (Part == ToolCase) return 100.0f * CaseHalf.X;
-    if (Part == RedSample || Part == BlueSample) return 100.0f * SampleR;
-    return 2.5f;
+    // Each finger stops at half the gripped part's thickness along x (as MuJoCo contact would).
+    if (Part == PickCube) return 2.5f;
+    if (Part == Vial) return 100.0f * VialR;
+    return HandleStopCm;
 }
 
 void ABASWorkcellActor::BeginPlay()
 {
     Super::BeginPlay();
 
-    // Free bodies in zero gravity, as in MuJoCo; masses from bas_lab/mod_extra_objects.xml where defined.
-    const TPair<UStaticMeshComponent*, float> Masses[] = {{PickCube.Get(), 0.08f}, {Canister.Get(), 0.06f},
-        {ToolCase.Get(), 0.05f}, {RedSample.Get(), 0.03f}, {BlueSample.Get(), 0.03f}};
+    // Free bodies in zero gravity, as in MuJoCo.
+    const TPair<UStaticMeshComponent*, float> Masses[] = {
+        {PickCube.Get(), 0.08f}, {Tool.Get(), 0.05f}, {Cartridge.Get(), 0.06f}, {Vial.Get(), 0.03f}};
     for (const TPair<UStaticMeshComponent*, float>& Mass : Masses)
     {
         Mass.Key->SetMassOverrideInKg(NAME_None, Mass.Value, true);
@@ -286,40 +339,55 @@ void ABASWorkcellActor::Tick(float DeltaSeconds)
         return;
     }
 
+    const float Opening = PandaRobot->FingerOpeningCm;
     if (HeldPart)
     {
-        if (PandaRobot->FingerOpeningCm >= FingerStopFor(HeldPart) + 0.7f)
+        if (Opening >= FingerStopFor(HeldPart) + 0.7f)
         {
             Release();
         }
     }
+    else if (HeldHandle != EBASHandle::None)
+    {
+        if (Opening >= HandleStopCm + 0.7f)
+        {
+            ReleaseHandle();
+        }
+        else
+        {
+            DriveHandle();
+        }
+    }
     else
     {
-        // Grasp proxy: closing fingers within 6 cm of an object's centre pick up the nearest one.
-        const FVector GraspPoint = PandaRobot->GetGraspCenterWorld();
-        UStaticMeshComponent* Best = nullptr;
-        float BestDist = 6.0f;
-        for (UStaticMeshComponent* Part : ActiveGraspables())
-        {
-            const float Dist = FVector::Dist(Part->GetComponentLocation(), GraspPoint);
-            if (PandaRobot->FingerOpeningCm <= FingerStopFor(Part) + 0.2f && Dist <= BestDist)
-            {
-                Best = Part;
-                BestDist = Dist;
-            }
-        }
-        if (Best)
-        {
-            Grasp(Best);
-        }
+        TryGrasp();
     }
-    if (Task == EBASTask::PressButton)
-    {
-        UpdateButtons();
-    }
+    UpdateMechanisms();
     if (ScriptedPhase >= 0)
     {
         AdvanceScriptedTest(DeltaSeconds);
+    }
+}
+
+void ABASWorkcellActor::TryGrasp()
+{
+    // Grasp proxy: closing fingers near an object (6 cm) or a handle (5 cm) take the nearest one.
+    const FVector GraspPoint = PandaRobot->GetGraspCenterWorld();
+    const float Opening = PandaRobot->FingerOpeningCm;
+    UStaticMeshComponent* Object = CanGraspObject() ? ActiveObject() : nullptr;
+    UStaticMeshComponent* Handle = ActiveHandle();
+    const float ObjectDist = Object && Opening <= FingerStopFor(Object) + 0.2f ?
+        FVector::Dist(Object->GetComponentLocation(), GraspPoint) : TNumericLimits<float>::Max();
+    const float HandleDist = Handle && Opening <= HandleStopCm + 0.2f ?
+        FVector::Dist(Handle->GetComponentLocation(), GraspPoint) : TNumericLimits<float>::Max();
+    if (ObjectDist <= 6.0f && ObjectDist <= HandleDist)
+    {
+        Grasp(Object);
+    }
+    else if (HandleDist <= 5.0f)
+    {
+        GripHandle(Task == EBASTask::StowInDrawer ? EBASHandle::Drawer :
+            Task == EBASTask::CloseValve ? EBASHandle::Valve : EBASHandle::Lid);
     }
 }
 
@@ -386,6 +454,38 @@ void ABASWorkcellActor::AdvanceScriptedTest(float DeltaSeconds)
     UE_LOG(LogTemp, Display, TEXT("BAS scripted test: %s"), *ScriptedTestStatus);
 }
 
+FVector ABASWorkcellActor::ToMujoco(const FVector& World) const
+{
+    const FVector Cm = WorkcellRoot->GetComponentTransform().InverseTransformPosition(World);
+    return FVector(Cm.X, -Cm.Y, Cm.Z) / 100.0;
+}
+
+FVector ABASWorkcellActor::LocalMujoco(const USceneComponent* Frame, const FVector& World) const
+{
+    const FVector Cm = Frame->GetComponentTransform().InverseTransformPosition(World);
+    return FVector(Cm.X, -Cm.Y, Cm.Z) / 100.0;
+}
+
+void ABASWorkcellActor::SetFree(UStaticMeshComponent* Part, bool bFree)
+{
+    Part->SetSimulatePhysics(false);
+    Part->SetCollisionEnabled(bFree ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+    if (bFree)
+    {
+        Part->SetSimulatePhysics(true);
+        Part->SetEnableGravity(false);
+        Part->SetPhysicsLinearVelocity(FVector::ZeroVector);
+        Part->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+    }
+}
+
+void ABASWorkcellActor::SnapInto(UStaticMeshComponent* Part, USceneComponent* Frame, const FVector& LocalMetres)
+{
+    SetFree(Part, false);
+    Part->AttachToComponent(Frame, FAttachmentTransformRules::KeepWorldTransform);
+    Part->SetRelativeLocationAndRotation(MujocoToUnrealCm(LocalMetres), FRotator::ZeroRotator);
+}
+
 void ABASWorkcellActor::Grasp(UStaticMeshComponent* Part)
 {
     USceneComponent* Frame = PandaRobot ? PandaRobot->GetGraspFrame() : nullptr;
@@ -393,9 +493,7 @@ void ABASWorkcellActor::Grasp(UStaticMeshComponent* Part)
     {
         return;
     }
-
-    Part->SetSimulatePhysics(false);
-    Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    SetFree(Part, false);
     if (Part->AttachToComponent(Frame, FAttachmentTransformRules::KeepWorldTransform))
     {
         if (Part == PickCube)
@@ -404,14 +502,13 @@ void ABASWorkcellActor::Grasp(UStaticMeshComponent* Part)
         }
         HeldPart = Part;
         bObjectHeld = true;
+        bItemStowed = false;
         // Fingers stop on the object, so openness reads as in MuJoCo (0.62 for the 5 cm cube).
         PandaRobot->SetFingerStopCm(FingerStopFor(Part));
     }
     else
     {
-        Part->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-        Part->SetSimulatePhysics(true);
-        Part->SetEnableGravity(false);
+        SetFree(Part, true);
     }
 }
 
@@ -424,123 +521,189 @@ void ABASWorkcellActor::Release()
     UStaticMeshComponent* Part = HeldPart;
     Part->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
     Part->AttachToComponent(WorkcellRoot, FAttachmentTransformRules::KeepWorldTransform);
-    Part->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-    Part->SetSimulatePhysics(true);
-    Part->SetEnableGravity(false);
-    Part->SetPhysicsLinearVelocity(FVector::ZeroVector);
-    Part->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
     HeldPart = nullptr;
     bObjectHeld = false;
     if (PandaRobot)
     {
         PandaRobot->SetFingerStopCm(0.0f);
     }
+    OnObjectReleased(Part);
 }
 
-void ABASWorkcellActor::ResetMovable(UStaticMeshComponent* Part, const FVector& Metres)
+void ABASWorkcellActor::OnObjectReleased(UStaticMeshComponent* Part)
 {
-    const bool bActive = ActiveGraspables().Contains(Part) && (HasActorBegunPlay() || IsActorBeginningPlay());
-    Part->SetSimulatePhysics(false);
-    Part->SetRelativeLocationAndRotation(MujocoToUnrealCm(Metres), FRotator::ZeroRotator);
-    if (bActive)
+    // Released inside its receptacle: settle onto the floor / into the slot and move with the fixture.
+    const FVector World = Part->GetComponentLocation();
+    if (Part == Tool)
     {
-        Part->SetSimulatePhysics(true);
-        Part->SetEnableGravity(false);
-        Part->SetPhysicsLinearVelocity(FVector::ZeroVector);
-        Part->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
-    }
-}
-
-void ABASWorkcellActor::ApplyTaskVisibility(bool bPlaying)
-{
-    const TArray<UStaticMeshComponent*> Collidable = {
-        PickCube.Get(), Canister.Get(), Dock.Get(), ToolCase.Get(), TrayFloor.Get(), TrayWalls[0].Get(),
-        TrayWalls[1].Get(), TrayWalls[2].Get(), TrayWalls[3].Get(), RedSample.Get(), BlueSample.Get(), Console.Get()};
-    for (EBASTask Each : {EBASTask::CubeToPad, EBASTask::CanisterToDock, EBASTask::ToolCaseToTray,
-             EBASTask::SortSamples, EBASTask::PressButton})
-    {
-        const bool bActive = Each == Task;
-        for (UStaticMeshComponent* Part : TaskParts(Each))
+        const FVector L = LocalMujoco(DrawerRoot, World);
+        const double MaxX = DrawerInner - ToolHalf.X + 0.01, MaxY = DrawerInner - ToolHalf.Y + 0.01;
+        const bool bOutsideCabinet = L.Y + DrawerOpenM - ToolHalf.Y >= CabinetHalf.Y - 0.01;
+        if (FMath::Abs(L.X) <= MaxX && FMath::Abs(L.Y) <= MaxY && bOutsideCabinet &&
+            L.Z <= DrawerFloorTop + ToolHalf.Z + 0.03)
         {
-            Part->SetVisibility(bActive);
-            Part->SetCollisionEnabled(bActive && Collidable.Contains(Part) ?
-                ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
-            if (!bActive && bPlaying)
-            {
-                Part->SetSimulatePhysics(false);
-            }
+            SnapInto(Tool, DrawerRoot, FVector(FMath::Clamp(L.X, -MaxX + 0.01, MaxX - 0.01),
+                FMath::Clamp(L.Y, -MaxY + 0.01, MaxY - 0.01), DrawerFloorTop + ToolHalf.Z));
+            bItemStowed = true;
+            return;
         }
     }
+    else if (Part == Cartridge)
+    {
+        const FVector L = LocalMujoco(ScrubberRoot, World);
+        if (FVector2D(L.X, L.Y).Size() <= 0.012 && L.Z <= 2 * ScrubberHalf.Z + CartridgeHalf.Z - 0.02)
+        {
+            SnapInto(Cartridge, ScrubberRoot, FVector(0, 0, SeatedCartridgeZ));
+            bCartridgeSeated = true;
+            return;
+        }
+    }
+    else if (Part == Vial)
+    {
+        const FVector L = LocalMujoco(ContainerRoot, World);
+        const double Max = ContainerInner - VialR + 0.008;
+        if (FMath::Abs(L.X) <= Max && FMath::Abs(L.Y) <= Max && L.Z <= ContainerH + VialH / 2 + 0.02)
+        {
+            SnapInto(Vial, ContainerRoot, FVector(FMath::Clamp(L.X, -Max + 0.008, Max - 0.008),
+                FMath::Clamp(L.Y, -Max + 0.008, Max - 0.008), 0.006 + VialH / 2));
+            bItemStowed = true;
+            return;
+        }
+    }
+    SetFree(Part, true);
+}
+
+void ABASWorkcellActor::GripHandle(EBASHandle Handle)
+{
+    USceneComponent* Frame = PandaRobot->GetGraspFrame();
+    HeldHandle = Handle;
+    GripStartYaw = Frame->GetComponentRotation().Yaw;
+    if (Handle == EBASHandle::Lid)
+    {
+        GripStartMujoco = LocalMujoco(ContainerRoot, Frame->GetComponentLocation()) - LidHinge;
+        GripStartValue = LidDeg;
+        bLidLatched = false;
+    }
+    else
+    {
+        GripStartMujoco = ToMujoco(Frame->GetComponentLocation());
+        GripStartValue = Handle == EBASHandle::Drawer ? DrawerOpenM : ValveDeg;
+    }
+    PandaRobot->SetFingerStopCm(HandleStopCm);
+}
+
+void ABASWorkcellActor::ReleaseHandle()
+{
+    // Snap into the end states: drawer shut, valve fully closed, lid latched.
+    switch (HeldHandle)
+    {
+    case EBASHandle::Drawer:
+        DrawerOpenM = DrawerOpenM <= 0.008f ? 0.0f : DrawerOpenM;
+        break;
+    case EBASHandle::Valve:
+        ValveDeg = FMath::Abs(ValveDeg) >= 85.0f ? FMath::Sign(ValveDeg) * 90.0f : ValveDeg;
+        break;
+    case EBASHandle::Lid:
+        bLidLatched = LidDeg <= 5.0f;
+        LidDeg = bLidLatched ? 0.0f : LidDeg;
+        break;
+    default:
+        break;
+    }
+    HeldHandle = EBASHandle::None;
+    PandaRobot->SetFingerStopCm(0.0f);
+}
+
+void ABASWorkcellActor::DriveHandle()
+{
+    // The gripped mechanism follows the hand along its one degree of freedom; pulling off-track slips.
+    USceneComponent* Frame = PandaRobot->GetGraspFrame();
+    if (HeldHandle == EBASHandle::Lid)
+    {
+        const FVector H = LocalMujoco(ContainerRoot, Frame->GetComponentLocation()) - LidHinge;
+        const double Radius = FVector2D(H.X, H.Z).Size(), StartRadius = FVector2D(GripStartMujoco.X, GripStartMujoco.Z).Size();
+        if (FMath::Abs(H.Y - GripStartMujoco.Y) > 0.04 || FMath::Abs(Radius - StartRadius) > 0.04)
+        {
+            return ReleaseHandle();
+        }
+        const double Swing = FMath::RadiansToDegrees(FMath::Atan2(H.Z, H.X) - FMath::Atan2(GripStartMujoco.Z, GripStartMujoco.X));
+        LidDeg = FMath::Clamp(static_cast<float>(GripStartValue + Swing), 0.0f, 90.0f);
+        return;
+    }
+    const FVector Move = ToMujoco(Frame->GetComponentLocation()) - GripStartMujoco;
+    if (HeldHandle == EBASHandle::Drawer)
+    {
+        if (FMath::Abs(Move.X) > 0.04 || FMath::Abs(Move.Z) > 0.04)
+        {
+            return ReleaseHandle();
+        }
+        DrawerOpenM = FMath::Clamp(static_cast<float>(GripStartValue + Move.Y), 0.0f, static_cast<float>(DrawerMaxOpen));
+    }
+    else if (HeldHandle == EBASHandle::Valve)
+    {
+        if (FVector2D(Move.X, Move.Y).Size() > 0.03)
+        {
+            return ReleaseHandle();
+        }
+        const float Turn = FMath::FindDeltaAngleDegrees(GripStartYaw, Frame->GetComponentRotation().Yaw);
+        ValveDeg = FMath::Clamp(GripStartValue + Turn, -90.0f, 90.0f);
+    }
+}
+
+void ABASWorkcellActor::UpdateMechanisms()
+{
+    DrawerRoot->SetRelativeLocation(MujocoToUnrealCm(FVector(0, DrawerOpenM, 0)));
+    ValveLeverRoot->SetRelativeRotation(FRotator(0, ValveDeg, 0));
+    LidRoot->SetRelativeRotation(FRotator(LidDeg, 0, 0));
+    SetColour(ValveLight, FMath::Abs(ValveDeg) >= 89.0f ? LitGreen : LitRed);
+    SetColour(ScrubberLight, bCartridgeSeated ? LitGreen : DimGreen);
+    SetColour(ContainerLight, bLidLatched ? LitGreen : DimAmber);
+}
+
+void ABASWorkcellActor::ApplyTaskVisibility()
+{
+    TargetMarker->SetVisibility(Task == EBASTask::CubeToPad);
+    PickCube->SetVisibility(Task == EBASTask::CubeToPad);
+    CabinetRoot->SetVisibility(Task == EBASTask::StowInDrawer, true);
+    Tool->SetVisibility(Task == EBASTask::StowInDrawer);
+    ValveRoot->SetVisibility(Task == EBASTask::CloseValve, true);
+    ScrubberRoot->SetVisibility(Task == EBASTask::InsertFilter, true);
+    Cartridge->SetVisibility(Task == EBASTask::InsertFilter);
+    ContainerRoot->SetVisibility(Task == EBASTask::SealContainer, true);
+    Vial->SetVisibility(Task == EBASTask::SealContainer);
 }
 
 void ABASWorkcellActor::PlaceTaskProps()
 {
-    // Task 1
-    TargetMarker->SetRelativeLocation(At(MarkerXY, 0.3765));
-    ResetMovable(PickCube, FVector(CubeStartXY.X, CubeStartXY.Y, 0.40));
-
-    // Task 2: canister upright on the bench, dock disc with a green centre.
-    Dock->SetRelativeLocation(At(MarkerXY, BenchZ + DockH / 2));
-    DockCentre->SetRelativeLocation(At(MarkerXY, BenchZ + DockH + 0.0005));
-    ResetMovable(Canister, FVector(CubeStartXY.X, CubeStartXY.Y, BenchZ + CanisterH / 2));
-
-    // Task 3: open tray, 4 walls around a thin floor.
-    TrayFloor->SetRelativeLocation(At(MarkerXY, BenchZ + TrayFloorT / 2));
-    const FVector2D WallOffsets[] = {
-        FVector2D(TrayHalf.X - TrayWall / 2, 0), FVector2D(-TrayHalf.X + TrayWall / 2, 0),
-        FVector2D(0, TrayHalf.Y - TrayWall / 2), FVector2D(0, -TrayHalf.Y + TrayWall / 2)};
-    for (int32 Index = 0; Index < 4; ++Index)
+    const bool bPlaying = HasActorBegunPlay() || IsActorBeginningPlay();
+    const auto ResetObject = [this, bPlaying](UStaticMeshComponent* Part, double HalfHeight)
     {
-        TrayWalls[Index]->SetRelativeLocation(At(MarkerXY + WallOffsets[Index], BenchZ + TrayWallH / 2));
-    }
-    ResetMovable(ToolCase, FVector(CubeStartXY.X, CubeStartXY.Y, BenchZ + CaseHalf.Z));
-
-    // Task 4: red sample/pad at CubeStartXY/MarkerXY, blue at the "Other" positions.
-    RedPad->SetRelativeLocation(At(MarkerXY, 0.3765));
-    BluePad->SetRelativeLocation(At(OtherTargetXY, 0.3765));
-    ResetMovable(RedSample, FVector(CubeStartXY.X, CubeStartXY.Y, BenchZ + SampleH / 2));
-    ResetMovable(BlueSample, FVector(OtherObjectXY.X, OtherObjectXY.Y, BenchZ + SampleH / 2));
-    OtherObjectStartXY = TargetVariant == 0 ? OtherObjectXY : CubeStartXY;
-
-    // Task 5: console at MarkerXY with two buttons and their indicator lights.
-    Console->SetRelativeLocation(At(MarkerXY, BenchZ + ConsoleHalf.Z));
-    const double GreenY = bSwapButtons ? -ButtonSideY : ButtonSideY;
-    GreenLight->SetRelativeLocation(At(MarkerXY + FVector2D(LightFrontX, GreenY), BenchZ + 2 * ConsoleHalf.Z + 0.002));
-    RedLight->SetRelativeLocation(At(MarkerXY + FVector2D(LightFrontX, -GreenY), BenchZ + 2 * ConsoleHalf.Z + 0.002));
-    bGreenPressed = bRedPressed = false;
-    SetButtonPressed(GreenButton, GreenLight, false, 0.0f);
-    SetButtonPressed(RedButton, RedLight, false, 0.0f);
-}
-
-void ABASWorkcellActor::SetButtonPressed(UStaticMeshComponent* Button, UStaticMeshComponent* Light, bool bPressed, float DepthCm)
-{
-    const bool bGreen = Button == GreenButton;
-    const double Y = (bGreen != bSwapButtons) ? ButtonSideY : -ButtonSideY;
-    const FVector Rest = At(MarkerXY + FVector2D(ButtonBackX, Y), ButtonTop - ButtonH / 2);
-    Button->SetRelativeLocation(Rest - FVector(0, 0, DepthCm));
-    SetColour(Light, bGreen ? (bPressed ? GreenLit : GreenDim) : (bPressed ? RedLit : RedDim));
-}
-
-void ABASWorkcellActor::UpdateButtons()
-{
-    // Kinematic press: a fingertip inside a button's rim pushes it down; past 6 mm it latches and lights up.
-    const FVector Tip = WorkcellRoot->GetComponentTransform().InverseTransformPosition(
-        PandaRobot->GetGraspCenterWorld()) - FVector(0, 0, FingertipBelowGraspCm);
-    const auto Depth = [this, &Tip](bool bGreen)
-    {
-        const double Y = (bGreen != bSwapButtons) ? ButtonSideY : -ButtonSideY;
-        const FVector Top = At(MarkerXY + FVector2D(ButtonBackX, Y), ButtonTop);
-        if (FVector2D(Tip.X - Top.X, Tip.Y - Top.Y).Size() > ButtonCatchCm)
+        if (Part->GetAttachParent() != WorkcellRoot)
         {
-            return 0.0f;
+            Part->AttachToComponent(WorkcellRoot, FAttachmentTransformRules::KeepWorldTransform);
         }
-        return FMath::Clamp(static_cast<float>(Top.Z - Tip.Z), 0.0f, ButtonTravelCm);
+        SetFree(Part, false);
+        Part->SetRelativeLocationAndRotation(At(CubeStartXY, BenchZ + HalfHeight), FRotator::ZeroRotator);
+        if (bPlaying && Part == ActiveObject())
+        {
+            SetFree(Part, true);
+        }
     };
-    const float GreenDepth = Depth(true), RedDepth = Depth(false);
-    bGreenPressed |= GreenDepth >= ButtonLatchCm;
-    bRedPressed |= RedDepth >= ButtonLatchCm;
-    SetButtonPressed(GreenButton, GreenLight, bGreenPressed, GreenDepth);
-    SetButtonPressed(RedButton, RedLight, bRedPressed, RedDepth);
+
+    TargetMarker->SetRelativeLocation(At(MarkerXY, 0.3765));
+    ResetObject(PickCube, 0.025);
+    ResetObject(Tool, ToolHalf.Z);
+    ResetObject(Cartridge, CartridgeHalf.Z);
+    ResetObject(Vial, VialH / 2);
+    for (USceneComponent* Fixture : {CabinetRoot.Get(), ValveRoot.Get(), ScrubberRoot.Get(), ContainerRoot.Get()})
+    {
+        Fixture->SetRelativeLocation(At(MarkerXY, BenchZ));
+    }
+    DrawerOpenM = 0.0f;
+    ValveDeg = 0.0f;
+    LidDeg = 90.0f;
+    bItemStowed = bCartridgeSeated = bLidLatched = false;
+    UpdateMechanisms();
 }
 
 void ABASWorkcellActor::ResetTask()
@@ -549,15 +712,20 @@ void ABASWorkcellActor::ResetTask()
     {
         Release();
     }
-    ApplyTaskVisibility(HasActorBegunPlay() || IsActorBeginningPlay());
+    if (HeldHandle != EBASHandle::None && PandaRobot)
+    {
+        ReleaseHandle();
+    }
+    HeldHandle = EBASHandle::None;
+    ApplyTaskVisibility();
     PlaceTaskProps();
 }
 
 void ABASWorkcellActor::RandomizeLayout(FRandomStream& Stream)
 {
-    const auto In = [&Stream](double XLo, double XHi, double YMax)
+    const auto In = [&Stream](double XLo, double XHi, double YLo, double YHi)
     {
-        return FVector2D(Stream.FRandRange(XLo, XHi), Stream.FRandRange(-YMax, YMax));
+        return FVector2D(Stream.FRandRange(XLo, XHi), Stream.FRandRange(YLo, YHi));
     };
     switch (Task)
     {
@@ -569,47 +737,27 @@ void ABASWorkcellActor::RandomizeLayout(FRandomStream& Stream)
             MarkerXY = FVector2D(Stream.FRandRange(0.57, 0.66), Stream.FRandRange(-0.20, 0.20));
         } while (FVector2D::Distance(CubeStartXY, MarkerXY) < 0.13);
         break;
-    case EBASTask::CanisterToDock:
+    case EBASTask::StowInDrawer:
+        // Cabinet on the right, drawer opening towards +y; tool on the left, clear of the open drawer.
+        MarkerXY = In(0.52, 0.60, -0.16, -0.12);
+        CubeStartXY = In(0.40, 0.47, 0.09, 0.15);
+        break;
+    case EBASTask::CloseValve:
+        MarkerXY = In(0.52, 0.62, -0.12, 0.12);
+        break;
+    case EBASTask::InsertFilter:
         do
         {
-            CubeStartXY = In(0.40, 0.49, 0.10);
-            MarkerXY = In(0.57, 0.66, 0.18);
+            CubeStartXY = In(0.40, 0.47, -0.10, 0.10);
+            MarkerXY = In(0.58, 0.64, -0.14, 0.14);
+        } while (FVector2D::Distance(CubeStartXY, MarkerXY) < 0.14);
+        break;
+    case EBASTask::SealContainer:
+        do
+        {
+            CubeStartXY = In(0.40, 0.47, -0.12, 0.12);
+            MarkerXY = In(0.57, 0.63, -0.14, 0.14);
         } while (FVector2D::Distance(CubeStartXY, MarkerXY) < 0.13);
-        break;
-    case EBASTask::ToolCaseToTray:
-        do
-        {
-            CubeStartXY = In(0.40, 0.48, 0.10);
-            MarkerXY = In(0.58, 0.63, 0.14);
-        } while (FVector2D::Distance(CubeStartXY, MarkerXY) < 0.15);
-        break;
-    case EBASTask::SortSamples:
-    {
-        const auto TooClose = [this]()
-        {
-            for (const FVector2D& Sample : {CubeStartXY, OtherObjectXY})
-            {
-                for (const FVector2D& Pad : {MarkerXY, OtherTargetXY})
-                {
-                    if (FVector2D::Distance(Sample, Pad) < 0.12) return true;
-                }
-            }
-            return FVector2D::Distance(CubeStartXY, OtherObjectXY) < 0.09 || FMath::Abs(MarkerXY.Y - OtherTargetXY.Y) < 0.12;
-        };
-        do
-        {
-            CubeStartXY = In(0.40, 0.49, 0.12);
-            OtherObjectXY = In(0.40, 0.49, 0.12);
-            MarkerXY = In(0.58, 0.65, 0.17);
-            OtherTargetXY = In(0.58, 0.65, 0.17);
-        } while (TooClose());
-        TargetVariant = Stream.RandRange(0, 1);
-        break;
-    }
-    case EBASTask::PressButton:
-        MarkerXY = In(0.56, 0.62, 0.12);
-        bSwapButtons = Stream.FRand() < 0.5f;
-        TargetVariant = Stream.RandRange(0, 1);
         break;
     }
 }
@@ -619,105 +767,72 @@ FString ABASWorkcellActor::GetTaskInstruction() const
     switch (Task)
     {
     case EBASTask::CubeToPad: return TEXT("Pick up the red cube and place it on the yellow marker.");
-    case EBASTask::CanisterToDock: return TEXT("Move the sample canister to the analysis dock.");
-    case EBASTask::ToolCaseToTray: return TEXT("Put the tool case in the storage tray.");
-    case EBASTask::SortSamples:
-        return TargetVariant == 0 ? TEXT("Put the red sample on the red pad.") : TEXT("Put the blue sample on the blue pad.");
-    case EBASTask::PressButton:
-        return TargetVariant == 0 ? TEXT("Press the green button on the control panel.") :
-            TEXT("Press the red button on the control panel.");
+    case EBASTask::StowInDrawer: return TEXT("Put the tool in the drawer and close it.");
+    case EBASTask::CloseValve: return TEXT("Close the coolant valve.");
+    case EBASTask::InsertFilter: return TEXT("Insert the filter cartridge into the air scrubber.");
+    case EBASTask::SealContainer: return TEXT("Put the sample vial in the container and close the lid.");
     }
     return FString();
 }
 
-FVector ABASWorkcellActor::ToMujoco(const UStaticMeshComponent* Part) const
-{
-    const FVector Cm = WorkcellRoot->GetComponentTransform().InverseTransformPosition(Part->GetComponentLocation());
-    return FVector(Cm.X, -Cm.Y, Cm.Z) / 100.0;
-}
-
 FVector ABASWorkcellActor::GetActiveObjectMujoco() const
 {
-    switch (Task)
+    if (UStaticMeshComponent* Object = ActiveObject())
     {
-    case EBASTask::CanisterToDock: return ToMujoco(Canister);
-    case EBASTask::ToolCaseToTray: return ToMujoco(ToolCase);
-    case EBASTask::SortSamples: return ToMujoco(TargetVariant == 0 ? RedSample : BlueSample);
-    case EBASTask::PressButton: return GetTargetMujoco();
-    default: return ToMujoco(PickCube);
+        return ToMujoco(Object->GetComponentLocation());
     }
+    return ToMujoco(ValveLever->GetComponentLocation());
 }
 
 FVector ABASWorkcellActor::GetTargetMujoco() const
 {
     switch (Task)
     {
-    case EBASTask::CanisterToDock: return FVector(MarkerXY.X, MarkerXY.Y, BenchZ + DockH);
-    case EBASTask::ToolCaseToTray: return FVector(MarkerXY.X, MarkerXY.Y, BenchZ + TrayFloorT);
-    case EBASTask::SortSamples:
-    {
-        const FVector2D Pad = TargetVariant == 0 ? MarkerXY : OtherTargetXY;
-        return FVector(Pad.X, Pad.Y, 0.377);
-    }
-    case EBASTask::PressButton:
-    {
-        const bool bGreen = TargetVariant == 0;
-        const double Y = (bGreen != bSwapButtons) ? ButtonSideY : -ButtonSideY;
-        return FVector(MarkerXY.X + ButtonBackX, MarkerXY.Y + Y, ButtonTop);
-    }
+    case EBASTask::StowInDrawer:
+        // Middle of the exposed drawer floor when fully open.
+        return FVector(MarkerXY.X, MarkerXY.Y + CabinetHalf.Y + DrawerMaxOpen / 2, BenchZ + DrawerFloorTop);
+    case EBASTask::CloseValve: return ToMujoco(ValveLever->GetComponentLocation());
+    case EBASTask::InsertFilter: return FVector(MarkerXY.X, MarkerXY.Y, BenchZ + 2 * ScrubberHalf.Z);
+    case EBASTask::SealContainer: return FVector(MarkerXY.X, MarkerXY.Y, BenchZ + 0.006);
     default: return FVector(MarkerXY.X, MarkerXY.Y, 0.377);
     }
 }
 
-bool ABASWorkcellActor::IsReleased() const
+void ABASWorkcellActor::GetTaskState(TMap<FString, double>& Out) const
 {
-    return !bObjectHeld && PandaRobot && PandaRobot->GetGripperOpenness() > 0.8f;
+    const auto Put = [&Out](const TCHAR* Name, const FVector& V)
+    {
+        Out.Add(FString(Name) + TEXT("_x"), V.X);
+        Out.Add(FString(Name) + TEXT("_y"), V.Y);
+        Out.Add(FString(Name) + TEXT("_z"), V.Z);
+    };
+    Put(TEXT("object"), GetActiveObjectMujoco());
+    Put(TEXT("target"), GetTargetMujoco());
+    if (const UStaticMeshComponent* Handle = ActiveHandle())
+    {
+        Put(TEXT("handle"), ToMujoco(Handle->GetComponentLocation()));
+    }
+    Out.Add(TEXT("held_object"), bObjectHeld ? 1.0 : 0.0);
+    Out.Add(TEXT("held_handle"), HeldHandle != EBASHandle::None ? 1.0 : 0.0);
+    Out.Add(TEXT("drawer_open"), DrawerOpenM);
+    Out.Add(TEXT("valve_deg"), ValveDeg);
+    Out.Add(TEXT("lid_deg"), LidDeg);
+    Out.Add(TEXT("stowed"), bItemStowed ? 1.0 : 0.0);
+    Out.Add(TEXT("seated"), bCartridgeSeated ? 1.0 : 0.0);
+    Out.Add(TEXT("latched"), bLidLatched ? 1.0 : 0.0);
 }
 
 bool ABASWorkcellActor::IsTaskSuccess() const
 {
+    const bool bHandsFree = !bObjectHeld && HeldHandle == EBASHandle::None && PandaRobot &&
+        PandaRobot->GetGripperOpenness() > 0.8f;
     switch (Task)
     {
-    case EBASTask::CubeToPad:
-        return IsCubePlaced() && IsReleased();
-    case EBASTask::CanisterToDock:
-    {
-        const FVector P = ToMujoco(Canister);
-        return IsReleased() && FVector2D::Distance(FVector2D(P.X, P.Y), MarkerXY) <= 0.025 &&
-            FMath::Abs(P.Z - (BenchZ + DockH + CanisterH / 2)) <= 0.02 &&
-            Canister->GetUpVector().Z >= FMath::Cos(FMath::DegreesToRadians(15.0f));
-    }
-    case EBASTask::ToolCaseToTray:
-    {
-        const FVector P = ToMujoco(ToolCase);
-        const double Slack = 0.01;
-        return IsReleased() &&
-            FMath::Abs(P.X - MarkerXY.X) <= TrayHalf.X - TrayWall - CaseHalf.X + Slack &&
-            FMath::Abs(P.Y - MarkerXY.Y) <= TrayHalf.Y - TrayWall - CaseHalf.Y + Slack &&
-            P.Z <= BenchZ + TrayFloorT + CaseHalf.Z + 0.02;
-    }
-    case EBASTask::SortSamples:
-    {
-        const FVector P = ToMujoco(TargetVariant == 0 ? RedSample : BlueSample);
-        const FVector O = ToMujoco(TargetVariant == 0 ? BlueSample : RedSample);
-        const FVector2D Pad = TargetVariant == 0 ? MarkerXY : OtherTargetXY;
-        return IsReleased() && FVector2D::Distance(FVector2D(P.X, P.Y), Pad) <= 0.035 &&
-            FMath::Abs(P.Z - (BenchZ + SampleH / 2)) <= 0.02 &&
-            FVector2D::Distance(FVector2D(O.X, O.Y), OtherObjectStartXY) <= 0.03;
-    }
-    case EBASTask::PressButton:
-    {
-        // Right button latched, wrong one untouched, fingertips back up at least 2 cm.
-        if (!PandaRobot)
-        {
-            return false;
-        }
-        const bool bTarget = TargetVariant == 0 ? bGreenPressed : bRedPressed;
-        const bool bWrong = TargetVariant == 0 ? bRedPressed : bGreenPressed;
-        const double TipZ = WorkcellRoot->GetComponentTransform().InverseTransformPosition(
-            PandaRobot->GetGraspCenterWorld()).Z / 100.0 - FingertipBelowGraspCm / 100.0;
-        return bTarget && !bWrong && TipZ >= ButtonTop + 0.02;
-    }
+    case EBASTask::CubeToPad: return bHandsFree && IsCubePlaced();
+    case EBASTask::StowInDrawer: return bHandsFree && bItemStowed && DrawerOpenM <= 0.001f;
+    case EBASTask::CloseValve: return bHandsFree && FMath::Abs(ValveDeg) >= 89.0f;
+    case EBASTask::InsertFilter: return bHandsFree && bCartridgeSeated;
+    case EBASTask::SealContainer: return bHandsFree && bItemStowed && bLidLatched;
     }
     return false;
 }
@@ -735,7 +850,7 @@ bool ABASWorkcellActor::IsCubePlaced() const
 void ABASWorkcellActor::OnConstruction(const FTransform& Transform)
 {
     Super::OnConstruction(Transform);
-    ApplyTaskVisibility(false);
+    ApplyTaskVisibility();
     PlaceTaskProps();
 
     SetColour(RobotMount, FLinearColor(0.30f, 0.33f, 0.38f));
@@ -744,23 +859,12 @@ void ABASWorkcellActor::OnConstruction(const FTransform& Transform)
     SetColour(BenchTop, FLinearColor(0.68f, 0.71f, 0.75f));
     SetColour(TargetMarker, FLinearColor(1.0f, 0.85f, 0.0f));
     SetColour(PickCube, FLinearColor(0.9f, 0.12f, 0.08f));
-
-    SetColour(Canister, FLinearColor(0.95f, 0.45f, 0.05f));      // orange sample canister
-    SetColour(Dock, FLinearColor(0.12f, 0.13f, 0.15f));          // dark analysis dock
-    SetColour(DockCentre, FLinearColor(0.1f, 0.8f, 0.3f));       // green docking spot
-    SetColour(ToolCase, FLinearColor(0.08f, 0.18f, 0.55f));      // navy tool case
-    SetColour(TrayFloor, FLinearColor(0.35f, 0.45f, 0.40f));     // grey-green storage tray
-    for (UStaticMeshComponent* Wall : TrayWalls)
+    SetColour(Tool, FLinearColor(1.0f, 0.75f, 0.05f));       // yellow tool
+    SetColour(Cartridge, FLinearColor(0.1f, 0.6f, 0.6f));    // teal filter cartridge
+    SetColour(Vial, FLinearColor(0.95f, 0.35f, 0.6f));       // pink sample vial
+    for (int32 Index = 0; Index < ColouredParts.Num() && Index < PartColours.Num(); ++Index)
     {
-        SetColour(Wall, FLinearColor(0.35f, 0.45f, 0.40f));
+        SetColour(ColouredParts[Index], PartColours[Index]);
     }
-    SetColour(RedSample, FLinearColor(0.9f, 0.1f, 0.08f));
-    SetColour(BlueSample, FLinearColor(0.1f, 0.3f, 0.95f));
-    SetColour(RedPad, FLinearColor(0.75f, 0.12f, 0.1f));
-    SetColour(BluePad, FLinearColor(0.12f, 0.25f, 0.8f));
-    SetColour(Console, FLinearColor(0.15f, 0.16f, 0.19f));       // dark control console
-    SetColour(GreenButton, FLinearColor(0.1f, 0.7f, 0.15f));
-    SetColour(RedButton, FLinearColor(0.85f, 0.1f, 0.08f));
-    SetButtonPressed(GreenButton, GreenLight, bGreenPressed, 0.0f);
-    SetButtonPressed(RedButton, RedLight, bRedPressed, 0.0f);
+    UpdateMechanisms();
 }
