@@ -50,6 +50,9 @@ public:
 
     bool IsCommandActive() const { return bCommandActive; }
 
+    /** Joint speeds ease to each new command over this time (0 = jump at once). */
+    float SpeedEaseSec = 0.0f;
+
     /** Where the current move ends (the present joints when no move is active). */
     const TArray<float>& GetCommandTargetsRad() const
     {
@@ -86,6 +89,7 @@ private:
     float CommandFingerTargetCm = 4.0f;
     bool bCommandActive = false;
     TArray<float> CommandJointSpeeds;
+    TArray<float> JointSpeedsNow;
     float CommandFingerSpeed = 4.0f;
     float FingerStopCm = 0.0f;
 };

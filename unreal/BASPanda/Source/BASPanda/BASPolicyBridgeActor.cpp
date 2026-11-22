@@ -551,8 +551,12 @@ void ABASPolicyBridgeActor::HandleResponse(FHttpRequestPtr Request, FHttpRespons
         }
     }
     FindActors();
+    if (Panda)
+    {
+        Panda->SpeedEaseSec = bLoop && bSmoothMotion ? 0.12f : 0.0f;
+    }
     if (!Panda || !Panda->CommandJointTargets(JointTargets, (*Targets)[7]->AsNumber(),
-        !bLoop ? 0.0f : bSmoothMotion ? FMath::Clamp(static_cast<float>(LatencyEma), StepDurationSec, 2.0f) : StepDurationSec))
+        !bLoop ? 0.0f : bSmoothMotion ? FMath::Clamp(1.2f * static_cast<float>(LatencyEma), StepDurationSec, 2.0f) : StepDurationSec))
     {
         return Fail(TEXT("Panda could not accept joint targets; run Simulate with motion test disabled"));
     }

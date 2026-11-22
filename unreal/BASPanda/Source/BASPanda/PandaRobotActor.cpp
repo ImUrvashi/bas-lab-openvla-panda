@@ -121,10 +121,15 @@ void APandaRobotActor::Tick(float DeltaSeconds)
         return;
     }
     bool bAtTarget = true;
+    JointSpeedsNow.SetNumZeroed(NumArmJoints);
     for (int32 Joint = 0; Joint < NumArmJoints; ++Joint)
     {
+        const float Wanted = CommandJointSpeeds.IsValidIndex(Joint) ? CommandJointSpeeds[Joint] : 0.5f;
+        // eased: the speed follows each new command over ~SpeedEaseSec instead of jumping (no kinks between steps)
+        JointSpeedsNow[Joint] = SpeedEaseSec > 0.0f ?
+            FMath::FInterpTo(JointSpeedsNow[Joint], Wanted, DeltaSeconds, 1.0f / SpeedEaseSec) : Wanted;
         ArmJointsRad[Joint] = FMath::FInterpConstantTo(ArmJointsRad[Joint], CommandTargetsRad[Joint], DeltaSeconds,
-            CommandJointSpeeds.IsValidIndex(Joint) ? CommandJointSpeeds[Joint] : 0.5f);
+            FMath::Max(JointSpeedsNow[Joint], 1e-3f));
         bAtTarget &= FMath::IsNearlyEqual(ArmJointsRad[Joint], CommandTargetsRad[Joint], 0.001f);
     }
     CommandFingerTargetCm = FMath::Max(CommandFingerTargetCm, FingerStopCm);
