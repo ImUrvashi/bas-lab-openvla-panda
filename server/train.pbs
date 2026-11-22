@@ -12,4 +12,4 @@ python panda_tests/finetune_panda.py \
     --resume_adapter $ROOT/${RESUME:-weights/side_v12_step2500}/lora_adapter \
     --batch_size 4 --grad_accumulation_steps 2 --max_steps ${STEPS:-2500} \
     --learning_rate ${LR:-5e-4} --lr_schedule cosine --warmup_steps 100 \
-    --save_steps 500 --keep_checkpoints
+    --save_steps ${SAVE:-500} --keep_checkpoints
