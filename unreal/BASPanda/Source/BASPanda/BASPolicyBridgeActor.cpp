@@ -97,24 +97,90 @@ void ABASPolicyBridgeActor::RunRequest(const FString& Request)
     {
         StopClosedLoop(TEXT("Stopped"));
         AskStatus = TEXT("Stopped. Type the next request.");
+        bAskStarted = false;
         return;
     }
+    if (bInterpreting || Request.TrimStartAndEnd().IsEmpty())
+    {
+        return;
+    }
+    if (!bUseLanguageFrontEnd)
+    {
+        return RunByKeywords(Request, TEXT("Keywords:"));
+    }
+    // Llama 3 on the GPU server reads the request; its task number picks the trained sentence for OpenVLA.
+    TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+    Body->SetStringField(TEXT("text"), Request);
+    FString JsonBody;
+    FJsonSerializer::Serialize(Body, TJsonWriterFactory<>::Create(&JsonBody));
+    TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Http = FHttpModule::Get().CreateRequest();
+    Http->SetURL((bUseModel ? ModelUrl : ScriptedUrl).Replace(TEXT("/act"), TEXT("/interpret")));
+    Http->SetVerb(TEXT("POST"));
+    Http->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+    Http->SetContentAsString(JsonBody);
+    Http->SetTimeout(30.0f);
+    TWeakObjectPtr<ABASPolicyBridgeActor> Self(this);
+    Http->OnProcessRequestComplete().BindLambda(
+        [Self, Request](FHttpRequestPtr, FHttpResponsePtr Response, bool bSucceeded)
+        {
+            if (!Self.IsValid())
+            {
+                return;
+            }
+            Self->bInterpreting = false;
+            TSharedPtr<FJsonObject> Out;
+            if (!bSucceeded || !Response.IsValid() || Response->GetResponseCode() != 200 ||
+                !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Response->GetContentAsString()), Out) ||
+                !Out.IsValid())
+            {
+                return Self->RunByKeywords(Request, TEXT("Llama 3 unavailable, keywords:"));
+            }
+            const int32 TaskNumber = static_cast<int32>(Out->GetNumberField(TEXT("task")));
+            const FString Reply = TEXT("Llama 3: ") + Out->GetStringField(TEXT("reply"));
+            UE_LOG(LogTemp, Display, TEXT("BAS ask: \"%s\" -> task %d (%s)"), *Request, TaskNumber, *Reply);
+            if (TaskNumber >= 1 && TaskNumber <= 5)
+            {
+                return Self->RunTask(static_cast<EBASTask>(TaskNumber - 1), Reply);
+            }
+            Self->AskStatus = Reply;
+            Self->bAskStarted = false;
+        });
+    if (Http->ProcessRequest())
+    {
+        bInterpreting = true;
+        AskStatus = TEXT("Asking Llama 3 ...");
+        bAskStarted = false;
+    }
+    else
+    {
+        RunByKeywords(Request, TEXT("Llama 3 unavailable, keywords:"));
+    }
+}
+
+void ABASPolicyBridgeActor::RunByKeywords(const FString& Request, const FString& Note)
+{
     EBASTask NewTask;
     if (!MatchTask(Request, NewTask))
     {
         AskStatus = TEXT("Not understood. Try: place the red cube on the marker / stow the tool in the drawer / "
                          "close the coolant valve / insert the filter / put the vial in the container");
+        bAskStarted = false;
         return;
     }
+    RunTask(NewTask, Note);
+}
+
+void ABASPolicyBridgeActor::RunTask(EBASTask NewTask, const FString& Note)
+{
     Task = NewTask;
     NumEpisodes = 1;
     bUseTaskInstruction = true;
     PolicyUrl = bUseModel ? ModelUrl : ScriptedUrl;
     StartClosedLoop();
-    if (Workcell)
-    {
-        AskStatus = FString::Printf(TEXT("Task %d: %s"), static_cast<int32>(Task) + 1, *Workcell->GetTaskInstruction());
-    }
+    bAskStarted = bLoopActive;
+    AskStatus = Workcell ? FString::Printf(TEXT("%s  ->  task %d: %s"), *Note, static_cast<int32>(Task) + 1,
+                                           *Workcell->GetTaskInstruction())
+                         : LoopStatus;
 }
 
 FString ABASPolicyBridgeActor::AskStatusText() const
@@ -124,7 +190,7 @@ FString ABASPolicyBridgeActor::AskStatusText() const
     {
         return FString::Printf(TEXT("%s   [%s, step %d/%d]"), *AskStatus, Mode, Step, MaxSteps);
     }
-    if (AskStatus.IsEmpty() || AskStatus.StartsWith(TEXT("Not understood")) || AskStatus.StartsWith(TEXT("Stopped")))
+    if (!bAskStarted)
     {
         return AskStatus.IsEmpty() ? FString::Printf(TEXT("Ready (%s). Type a request and press Enter."), Mode) : AskStatus;
     }

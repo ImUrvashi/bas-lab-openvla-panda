@@ -100,11 +100,13 @@ on the bridge, each episode shifts every prop by up to `LayoutJitterM` (1 cm) ar
 ## Asking the robot (Play)
 
 With Run Closed Loop on Begin Play off, press **Play** (not Simulate): a box at the bottom of the view takes a
-request such as "close the coolant valve". Keywords pick the task (vial/container/lid, drawer/tool, valve,
-filter/cartridge/scrubber, cube/marker); the trained sentence for that task is sent, and the task runs once.
+request such as "the coolant line is leaking, shut it off". Llama 3 on the GPU server (serve.pbs with
+LLM=meta-llama/Meta-Llama-3-8B-Instruct) picks the task or declines; if it does not answer, keywords do
+(vial/container/lid, drawer/tool, valve, filter/cartridge/scrubber, cube/marker). The trained sentence for that
+task is sent to the policy, and the task runs once.
 **Mode** switches between two gateways:
 
     # OpenVLA (tunnel to the model server on 8001)
     .venv/bin/python policy_ik_gateway.py --upstream-url http://127.0.0.1:8001/act            # port 8000
     # scripted experts
-    .venv/bin/python policy_ik_gateway.py --policy expert --port 8002
+    .venv/bin/python policy_ik_gateway.py --policy expert --port 8002 --llm-url http://127.0.0.1:8001/interpret

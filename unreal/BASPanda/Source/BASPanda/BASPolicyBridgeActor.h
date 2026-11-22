@@ -96,6 +96,10 @@ public:
     UPROPERTY(EditAnywhere, Category = "BAS Ask")
     bool bUseModel = true;
 
+    /** Ask the gateway's Llama 3 front end (/interpret) which task a request means; keywords if it does not answer. */
+    UPROPERTY(EditAnywhere, Category = "BAS Ask")
+    bool bUseLanguageFrontEnd = true;
+
     /** Keyword match of a free-text request to a task; false if nothing matches. */
     static bool MatchTask(const FString& Request, EBASTask& OutTask);
 
@@ -104,6 +108,8 @@ public:
 
 private:
     void BuildCommandBox();
+    void RunByKeywords(const FString& Request, const FString& Note);
+    void RunTask(EBASTask NewTask, const FString& Note);
     FString AskStatusText() const;
     bool SendObservation();
     void HandleResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded);
@@ -129,5 +135,7 @@ private:
     int32 TotalRequests = 0;
     FString LastPhase;
     FString AskStatus;
+    bool bInterpreting = false;
+    bool bAskStarted = false;
     TSharedPtr<SWidget> CommandBox;
 };
