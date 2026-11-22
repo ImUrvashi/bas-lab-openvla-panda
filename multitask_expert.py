@@ -32,6 +32,28 @@ NOISE = {"REACH": 1.0, "DESCEND": 0.4, "CLOSE": 0.0, "LIFT": 0.4, "TRANSFER": 1.
 OPEN_STAGES = {"REACH", "DESCEND", "RELEASE", "RISE", "H_REACH", "H_DESCEND", "LETGO", "REOPEN", "DONE"}
 
 
+# Long tasks are taught as sub-steps: one frame of "hand over the closed drawer" is the start or the end of task 2,
+# and only the sentence can tell which. Unreal switches sentence on the same state changes (GetTaskInstruction).
+SUBSTEPS = {
+    2: ["Open the drawer.", "Put the tool in the drawer.", "Close the drawer."],
+    5: ["Put the sample vial in the container.", "Close the lid."],
+}
+
+
+def substep_labels(task, phases):
+    """Per-frame sub-step sentence: task 2 switches after the drawer is let go and after the tool is released,
+    task 5 after the vial is released."""
+    phases = [str(p) for p in phases]
+    ends = {2: ["LETGO", "RELEASE"], 5: ["RELEASE"]}[task]
+    out, k, prev = [], 0, None
+    for p in phases:
+        if k < len(ends) and prev == ends[k] and p != ends[k]:
+            k += 1
+        out.append(SUBSTEPS[task][k])
+        prev = p
+    return out
+
+
 def above(p, dz=0.0):
     """Hand position that puts the grasp centre at p (plus dz)."""
     return np.asarray(p, float) + [0.0, 0.0, GRASP_BELOW_HAND + dz]

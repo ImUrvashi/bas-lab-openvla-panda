@@ -10,14 +10,19 @@ from this data; --val_per_task holds out each task's last N episodes as val_fram
     python build_unreal_export.py --demo_dir demonstrations_unreal --out panda_openvla_data_unreal_t1
     python build_unreal_export.py --demo_dir demonstrations_bench --out panda_openvla_data_bench \
         --stride 3 --new_stats --val_per_task 10
+    # same frames, sub-step sentences for tasks 2 and 5, images shared with the export above
+    python build_unreal_export.py --demo_dir demonstrations_bench --out panda_openvla_data_bench_sub \
+        --stride 3 --new_stats --val_per_task 10 --substeps --images_from panda_openvla_data_bench
 """
 import argparse
 import json
+import os
 from pathlib import Path
 
 import numpy as np
 
 import expert_policy as E
+import multitask_expert as M
 import openvla_adapter as A
 import panda_openvla_dataset as P
 
@@ -32,6 +37,8 @@ def main():
     ap.add_argument("--stride", type=int, default=2)
     ap.add_argument("--new_stats", action="store_true", help="action bounds from this data, not --stats_from")
     ap.add_argument("--val_per_task", type=int, default=0, help="hold out each task's last N episodes")
+    ap.add_argument("--substeps", action="store_true", help="tasks 2 and 5: per-frame sub-step sentences")
+    ap.add_argument("--images_from", type=Path, default=None, help="reuse this export's images_new.npy (same frames)")
     args = ap.parse_args()
     if args.out.exists() and any(args.out.iterdir()):
         raise FileExistsError(f"{args.out} is not empty")
@@ -47,24 +54,35 @@ def main():
     if args.val_per_task:
         for t in set(task_of.values()):
             val |= set([p for p in paths if task_of[p] == t][-args.val_per_task:])
-        write_val(sorted(val), task_of, args.out / "val_frames.npz")
+        write_val(sorted(val), task_of, args.out / "val_frames.npz", substeps=args.substeps)
     paths = [p for p in paths if p not in val]
     labels = {p: label(np.load(p, allow_pickle=True), task_of[p]) for p in paths}
     if args.new_stats:
         stats = new_stats(np.concatenate([l[::args.stride] for l in labels.values()]))
         stats_doc = {P.DATASET_NAME: {**stats_doc[P.DATASET_NAME], "action": stats}}
     n_total = sum(len(range(0, len(l), args.stride)) for l in labels.values())
-    imgs = np.lib.format.open_memmap(args.out / "images_new.npy", "w+", np.uint8, (n_total, 224, 224, 3))
+    if args.images_from:
+        imgs_path = args.images_from / "images_new.npy"
+        imgs = np.load(imgs_path, mmap_mode="r")
+        assert imgs.shape[0] == n_total, f"{imgs_path}: {imgs.shape[0]} frames, this export has {n_total}"
+    else:
+        imgs_path = args.out / "images_new.npy"
+        imgs = np.lib.format.open_memmap(imgs_path, "w+", np.uint8, (n_total, 224, 224, 3))
     a7, ep_idx, frm_idx, instr, info = [], [], [], [], []
     for k, p in enumerate(paths):
         d = np.load(p, allow_pickle=True)
         lab = labels[p]
         idx = np.arange(0, len(lab), args.stride)
-        imgs[len(frm_idx):len(frm_idx) + len(idx)] = d["images"][idx]; a7.append(lab[idx])
-        ep_idx += [k] * len(idx); frm_idx += idx.tolist(); instr += [str(d["instruction"])] * len(idx)
+        if not args.images_from:
+            imgs[len(frm_idx):len(frm_idx) + len(idx)] = d["images"][idx]
+        a7.append(lab[idx])
+        ep_idx += [k] * len(idx); frm_idx += idx.tolist()
+        instr += [sentences(d, task_of[p], args.substeps)[i] for i in idx]
         info.append({"episode": k, "file": p.name, "frames": int(len(idx)), "instruction": str(d["instruction"]),
                      "split": "train", "source": "unreal_expert", "sigma_m": float(d["sigma"]), "task": task_of[p]})
-    imgs.flush(); a7 = np.concatenate(a7).astype(np.float32)
+    if not args.images_from:
+        imgs.flush()
+    a7 = np.concatenate(a7).astype(np.float32)
     ep_all = np.asarray(ep_idx, dtype=np.int32); frm_all = np.asarray(frm_idx, dtype=np.int32)
 
     prev = np.concatenate([[a7[0, 6]], a7[:-1, 6]])
@@ -73,7 +91,8 @@ def main():
     idle = (np.linalg.norm(a7[:, :3], axis=1) < P.IDLE_POS_M) & (np.abs(a7[:, 3:6]).max(1) < P.IDLE_ROT) & ~gchg
     np.savez_compressed(args.out / "data.npz", actions7=a7, actions_norm=P.normalize_actions(a7, stats),
                         episode_index=ep_all, frame_index=frm_all, idle=idle)
-    (args.out / "images_parts.json").write_text(json.dumps([{"path": "images_new.npy", "n": int(len(a7))}]))
+    rel = os.path.relpath(imgs_path, args.out)
+    (args.out / "images_parts.json").write_text(json.dumps([{"path": rel, "n": int(len(a7))}]))
     (args.out / "instructions.json").write_text(json.dumps(instr))
     (args.out / "split.json").write_text(json.dumps(
         {"train": [e["episode"] for e in info], "val": [], "episodes": info,
@@ -99,14 +118,21 @@ def new_stats(a7):
     return s
 
 
-def write_val(paths, task_of, out, stride=2):
+def sentences(d, task, substeps):
+    """Instruction per recorded frame: the task sentence, or sub-step sentences for tasks 2 and 5."""
+    if substeps and task in M.SUBSTEPS:
+        return M.substep_labels(task, d["phase"])
+    return [str(d["instruction"])] * len(d["labels7"])
+
+
+def write_val(paths, task_of, out, stride=2, substeps=False):
     """Held-out frames for eval_checkpoints.py: image, label, phase and instruction per frame."""
     imgs, labs, phase, instr = [], [], [], []
     for p in paths:
         d = np.load(p, allow_pickle=True)
         idx = np.arange(0, len(d["labels7"]), stride)
         imgs.append(d["images"][idx]); labs.append(label(d, task_of[p])[idx]); phase.append(d["phase"][idx])
-        instr += [str(d["instruction"])] * len(idx)
+        instr += [sentences(d, task_of[p], substeps)[i] for i in idx]
     np.savez(out, images=np.concatenate(imgs), labels=np.concatenate(labs), phase=np.concatenate(phase),
              instruction=np.array(instr))
     print(f"wrote {out}: {len(instr)} frames from {len(paths)} held-out episodes")
