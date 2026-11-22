@@ -524,10 +524,9 @@ void ABASWorkcellActor::Grasp(UStaticMeshComponent* Part)
     SetFree(Part, false);
     if (Part->AttachToComponent(Frame, FAttachmentTransformRules::KeepWorldTransform))
     {
-        if (Part == PickCube)
-        {
-            Part->SetWorldLocation(Frame->GetComponentLocation());
-        }
+        // Centre every object between the fingers, as the demos grasp them: an early close a few cm above
+        // the object otherwise leaves it hanging below the hand, which the policy cannot read as "held".
+        Part->SetWorldLocation(Frame->GetComponentLocation());
         HeldPart = Part;
         bObjectHeld = true;
         bToolStowed &= Part != Tool;
