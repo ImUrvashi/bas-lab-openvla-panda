@@ -136,6 +136,7 @@ private:
     FString LastPhase;
     FString AskStatus;
     bool bInterpreting = false;
+    bool bReturningHome = false;
     bool bAskStarted = false;
     TSharedPtr<SWidget> CommandBox;
 };

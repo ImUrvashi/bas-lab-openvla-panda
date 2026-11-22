@@ -329,6 +329,7 @@ void ABASPolicyBridgeActor::StartClosedLoop()
 void ABASPolicyBridgeActor::StopClosedLoop(const FString& Reason)
 {
     bLoopActive = false;
+    bReturningHome = CommandBox.IsValid();     // after a typed request, glide back to the rest pose
     LoopStatus = Reason;
     UE_LOG(LogTemp, Display, TEXT("BAS loop: %s"), *LoopStatus);
 }
@@ -370,6 +371,18 @@ void ABASPolicyBridgeActor::EndEpisode(bool bSuccess, const FString& Why)
 void ABASPolicyBridgeActor::Tick(float DeltaSeconds)
 {
     Super::Tick(DeltaSeconds);
+    if (bReturningHome && !bLoopActive && Panda && !Panda->IsCommandActive())
+    {
+        static const TArray<float> Home = {0.0f, 0.0f, 0.0f, -1.57079f, 0.0f, 1.57079f, -0.7853f};
+        float Off = 0.0f;
+        for (int32 J = 0; J < Home.Num() && J < Panda->ArmJointsRad.Num(); ++J)
+        {
+            Off = FMath::Max(Off, FMath::Abs(Home[J] - Panda->ArmJointsRad[J]));
+        }
+        // the Panda limits each command to 0.15 rad per joint, so this takes a few steps
+        bReturningHome = Off > 0.005f && Panda->CommandJointTargets(Home, 1.0f, 0.25f);
+        return;
+    }
     // Next step only once the previous action has been fully executed and answered.
     if (!bLoopActive || bRequestInFlight || !Panda || Panda->IsCommandActive())
     {
