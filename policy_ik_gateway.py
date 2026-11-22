@@ -38,6 +38,7 @@ MAX_BODY_BYTES = 1_000_000
 MAX_HAND_STEP_M = 0.03
 MAX_JOINT_STEP_RAD = 0.15
 MAX_IK_RESIDUAL_M = 0.01
+FREE_MOVE_M = 0.0046       # experts move 5 mm/step in free space, at most 4 mm near contact
 POSTURE_GAIN = 0.05        # per-step pull of the spare DoF towards the home posture
 SAMPLE_ACTION = [0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
@@ -135,6 +136,14 @@ def convert_action(kin, joints, opening, action):
     return action.tolist(), target8.tolist(), residual
 
 
+def speed_up(action, k):
+    """Scale free-space moves (the model's full-speed 5 mm steps) by k; slower fine moves near objects stay as they are."""
+    action = list(action)
+    if k != 1.0 and np.linalg.norm(action[:3]) >= FREE_MOVE_M:
+        action[:3] = [k * v for v in action[:3]]
+    return action
+
+
 def png_b64(rgb):
     """224x224 frame as lossless PNG: about a quarter of the raw bytes over the VPN."""
     buf = io.BytesIO()
@@ -184,6 +193,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
     kin = None
     trace = None
     grip_gate = False
+    speed = 1.0
     gate_count = 0
     upstream_url = None
     llm_url = None
@@ -258,6 +268,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     action, phase = gate_gripper(type(self), action, opening, request.get("step", 0))
                 if self.trace:
                     trace_step(type(self), request, joints, opening, action)
+                action = speed_up(action, self.speed)
             with self.lock:
                 if not self.upstream_url and self.policy == "expert":
                     action, phase = expert_action(type(self), request, joints, opening, rgb)
@@ -286,12 +297,15 @@ def main():
     parser.add_argument("--llm-url", help="language front end POST /interpret (default: next to --upstream-url)")
     parser.add_argument("--grip-gate", action="store_true",
                         help="upstream mode: accept a close only when the model also asks to stand still")
+    parser.add_argument("--speed", type=float, default=1.0,
+                        help="upstream mode: multiply free-space moves by this (e.g. 2); fine moves are unchanged")
     parser.add_argument("--trace", help="upstream mode: append per-step grasp diagnostics to this CSV")
     parser.add_argument("--save-image", help="overwrite this PNG with every observation (camera check)")
     args = parser.parse_args()
     GatewayHandler.kin = PandaKinematics()
     GatewayHandler.upstream_url = args.upstream_url
     GatewayHandler.grip_gate = args.grip_gate
+    GatewayHandler.speed = args.speed
     GatewayHandler.trace = Path(args.trace) if args.trace else None
     GatewayHandler.llm_url = args.llm_url or (
         args.upstream_url.rsplit("/", 1)[0] + "/interpret" if args.upstream_url else None)
