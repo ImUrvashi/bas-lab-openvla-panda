@@ -57,7 +57,8 @@ public:
     /** New random shift of every prop around its home spot. */
     void RandomizeLayout(FRandomStream& Stream);
 
-    FString GetTaskInstruction() const;
+    /** Task sentence; with bSubsteps, tasks 2 and 5 give the current sub-step (multitask_expert.SUBSTEPS). */
+    FString GetTaskInstruction(bool bSubsteps = false) const;
 
     /** Loose object (task 3: valve lever), MuJoCo metres. */
     FVector GetActiveObjectMujoco() const;

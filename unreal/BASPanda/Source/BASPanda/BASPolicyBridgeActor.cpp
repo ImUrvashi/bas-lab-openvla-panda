@@ -188,7 +188,9 @@ FString ABASPolicyBridgeActor::AskStatusText() const
     const TCHAR* Mode = bUseModel ? TEXT("OpenVLA") : TEXT("scripted");
     if (bLoopActive)
     {
-        return FString::Printf(TEXT("%s   [%s, step %d/%d]"), *AskStatus, Mode, Step, MaxSteps);
+        const FString Now = Workcell && bSubstepInstructions ? Workcell->GetTaskInstruction(true) : FString();
+        return FString::Printf(TEXT("%s   [%s, step %d/%d]%s%s"), *AskStatus, Mode, Step, MaxSteps,
+                               Now.IsEmpty() ? TEXT("") : TEXT("   now: "), *Now);
     }
     if (!bAskStarted)
     {
@@ -432,7 +434,7 @@ bool ABASPolicyBridgeActor::SendObservation()
 
     TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
     Payload->SetStringField(TEXT("instruction"),
-        bUseTaskInstruction && Workcell ? Workcell->GetTaskInstruction() : Instruction);
+        bUseTaskInstruction && Workcell ? Workcell->GetTaskInstruction(bSubstepInstructions) : Instruction);
     Payload->SetStringField(TEXT("image_b64"), FBase64::Encode(RGB.GetData(), RGB.Num()));
     Payload->SetArrayField(TEXT("shape"), JsonNumbers({240, 320, 3}));
     if (Panda && Panda->ArmJointsRad.Num() == 7)

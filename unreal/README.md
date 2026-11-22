@@ -103,7 +103,10 @@ With Run Closed Loop on Begin Play off, press **Play** (not Simulate): a box at 
 request such as "the coolant line is leaking, shut it off". Llama 3 on the GPU server (serve.pbs with
 LLM=meta-llama/Meta-Llama-3-8B-Instruct) picks the task or declines; if it does not answer, keywords do
 (vial/container/lid, drawer/tool, valve, filter/cartridge/scrubber, cube/marker). The trained sentence for that
-task is sent to the policy, and the task runs once.
+task is sent to the policy, and the task runs once. With Substep Instructions on (bridge, BAS Ask), the drawer and
+lid tasks send their current sub-step instead ("Open the drawer." -> "Put the tool in the drawer." -> "Close the
+drawer."; "Put the sample vial in the container." -> "Close the lid."); use it with models trained on
+panda_openvla_data_bench_sub, turn it off for earlier ones.
 **Mode** switches between two gateways:
 
     # OpenVLA (tunnel to the model server on 8001)

@@ -750,8 +750,22 @@ void ABASWorkcellActor::RandomizeLayout(FRandomStream& Stream)
     }
 }
 
-FString ABASWorkcellActor::GetTaskInstruction() const
+FString ABASWorkcellActor::GetTaskInstruction(bool bSubsteps) const
 {
+    // Same switch points as the training labels: after the drawer knob / the tool / the vial is let go.
+    if (bSubsteps && Task == EBASTask::StowInDrawer)
+    {
+        if (bToolStowed && !bObjectHeld)
+        {
+            return TEXT("Close the drawer.");
+        }
+        return DrawerOpenM >= 0.09f && HeldHandle == EBASHandle::None ? TEXT("Put the tool in the drawer.")
+                                                                         : TEXT("Open the drawer.");
+    }
+    if (bSubsteps && Task == EBASTask::SealContainer)
+    {
+        return bVialStowed && !bObjectHeld ? TEXT("Close the lid.") : TEXT("Put the sample vial in the container.");
+    }
     switch (Task)
     {
     case EBASTask::CubeToPad: return TEXT("Pick up the red cube and place it on the yellow marker.");

@@ -96,6 +96,10 @@ public:
     UPROPERTY(EditAnywhere, Category = "BAS Ask")
     bool bUseModel = true;
 
+    /** Drawer and lid tasks: send the current sub-step sentence (models trained with --substeps). */
+    UPROPERTY(EditAnywhere, Category = "BAS Ask")
+    bool bSubstepInstructions = true;
+
     /** Ask the gateway's Llama 3 front end (/interpret) which task a request means; keywords if it does not answer. */
     UPROPERTY(EditAnywhere, Category = "BAS Ask")
     bool bUseLanguageFrontEnd = true;
