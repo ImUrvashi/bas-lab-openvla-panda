@@ -20,6 +20,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
@@ -158,8 +159,28 @@ def gate_gripper(handler, action, opening, step, still_m=0.0015, need=2):
     return action, ""
 
 
+def trace_step(handler, request, joints, opening, action):
+    """One CSV row per model step: grasp centre vs the task's object (Unreal's privileged state), to see why a
+    grasp fails. Logging only; the model never sees this."""
+    hand, R = handler.kin.fk(joints)
+    grasp = hand + R[:, 2] * 0.094
+    st = request.get("state", {})
+    obj = np.array([st.get(k, np.nan) for k in ("object_x", "object_y", "object_z")])
+    if "handle_x" in st and st.get("held_object", 0) < 0.5 and request.get("task") in (2, 5):
+        obj = np.array([st["handle_x"], st["handle_y"], st["handle_z"]])
+    d = (grasp - obj) * 100
+    new = not handler.trace.exists()
+    with handler.trace.open("a") as f:
+        if new:
+            f.write("task,episode,step,dx_cm,dy_cm,dz_cm,dist_cm,opening,held_obj,held_handle,act_dz_mm,act_grip\n")
+        f.write(f"{request.get('task')},{request.get('episode')},{request.get('step')},{d[0]:.1f},{d[1]:.1f},"
+                f"{d[2]:.1f},{np.linalg.norm(d):.1f},{opening:.2f},{st.get('held_object', 0):.0f},"
+                f"{st.get('held_handle', 0):.0f},{action[2] * 1000:.1f},{action[6]:.2f}\n")
+
+
 class GatewayHandler(BaseHTTPRequestHandler):
     kin = None
+    trace = None
     grip_gate = False
     gate_count = 0
     upstream_url = None
@@ -233,6 +254,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     action = json.load(response)["action"]
                 if self.grip_gate:
                     action, phase = gate_gripper(type(self), action, opening, request.get("step", 0))
+                if self.trace:
+                    trace_step(type(self), request, joints, opening, action)
             with self.lock:
                 if not self.upstream_url and self.policy == "expert":
                     action, phase = expert_action(type(self), request, joints, opening, rgb)
@@ -261,11 +284,13 @@ def main():
     parser.add_argument("--llm-url", help="language front end POST /interpret (default: next to --upstream-url)")
     parser.add_argument("--grip-gate", action="store_true",
                         help="upstream mode: accept a close only when the model also asks to stand still")
+    parser.add_argument("--trace", help="upstream mode: append per-step grasp diagnostics to this CSV")
     parser.add_argument("--save-image", help="overwrite this PNG with every observation (camera check)")
     args = parser.parse_args()
     GatewayHandler.kin = PandaKinematics()
     GatewayHandler.upstream_url = args.upstream_url
     GatewayHandler.grip_gate = args.grip_gate
+    GatewayHandler.trace = Path(args.trace) if args.trace else None
     GatewayHandler.llm_url = args.llm_url or (
         args.upstream_url.rsplit("/", 1)[0] + "/interpret" if args.upstream_url else None)
     GatewayHandler.policy = args.policy
