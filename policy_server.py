@@ -1,5 +1,5 @@
 """
-policy_server.py -- serve a fine-tuned OpenVLA (4-bit base + LoRA adapter) over localhost HTTP.
+policy_server.py -- serve a fine-tuned OpenVLA (4-bit or bf16 base + LoRA adapters) over localhost HTTP.
 
 Runs on the machine with the GPU (copy next to the OpenVLA repo). Binds 127.0.0.1 only; if the
 simulator runs on another machine, forward port 8000 to it (e.g. an SSH local port-forward).
@@ -45,8 +45,18 @@ def build_prompt(instruction):
     return f"In: What action should the robot take to {P.format_instruction(instruction)}?\nOut:"
 
 
+def adapter_for(instruction):
+    """Name of the LoRA adapter that serves this instruction (first matching --route prefix, else the main one)."""
+    text = instruction.strip().lower()
+    return next((name for prefix, name in STATE["routes"] if text.startswith(prefix)), "default")
+
+
 def predict(instruction, image_u8):
     proc, inner, key = STATE["proc"], STATE["inner"], STATE["unnorm_key"]
+    name = adapter_for(instruction)
+    if name != STATE["active"]:
+        STATE["model"].set_adapter(name)
+        STATE["active"] = name
     inputs = proc(build_prompt(instruction), Image.fromarray(image_u8)).to("cuda:0", dtype=torch.bfloat16)
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
         action = inner.predict_action(**inputs, unnorm_key=key, do_sample=False)
@@ -64,7 +74,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self._send(200, {"ok": True, "adapter": STATE["adapter"], "requests": STATE["n"]})
+            self._send(200, {"ok": True, "adapter": STATE["adapter"], "bf16": STATE["bf16"],
+                             "routes": [p for p, _ in STATE["routes"]], "requests": STATE["n"]})
         else:
             self._send(404, {"error": "not found"})
 
@@ -111,6 +122,9 @@ def main():
     ap.add_argument("--adapter_dir", type=Path, required=True, help=".../lora_adapter (run dir holds dataset_statistics.json)")
     ap.add_argument("--stats", type=Path, default=None, help="dataset_statistics.json (default: next to adapter_dir)")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--bf16", action="store_true", help="bf16 base instead of 4-bit (several times faster, ~16 GB)")
+    ap.add_argument("--route", action="append", default=[], metavar="PREFIX=ADAPTER_DIR",
+                    help="serve instructions starting with PREFIX with another adapter (same dataset statistics)")
     ap.add_argument("--llm", default=None, help="also load this chat model as the request front end (/interpret)")
     args = ap.parse_args()
 
@@ -119,16 +133,25 @@ def main():
     unnorm_key = P.DATASET_NAME
     assert unnorm_key in stats, f"{unnorm_key} not in {stats_path}"
 
-    print("loading processor + 4-bit base ...", flush=True)
+    print(f"loading processor + {'bf16' if args.bf16 else '4-bit'} base ...", flush=True)
     proc = AutoProcessor.from_pretrained(args.vla_path, trust_remote_code=True)
-    base = F.load_vla(args.vla_path, quantize=True)
-    base = prepare_model_for_kbit_training(base, use_gradient_checkpointing=False)  # same numerics as training
-    model = PeftModel.from_pretrained(base, str(args.adapter_dir))
+    base = F.load_vla(args.vla_path, quantize=not args.bf16)
+    if not args.bf16:
+        base = prepare_model_for_kbit_training(base, use_gradient_checkpointing=False)  # same numerics as training
+    model = PeftModel.from_pretrained(base, str(args.adapter_dir), adapter_name="default")
+    routes = []
+    for k, r in enumerate(args.route):
+        prefix, path = r.split("=", 1)
+        model.load_adapter(path, adapter_name=f"route{k}")
+        routes.append((prefix.strip().lower(), f"route{k}"))
+        print(f"route {prefix!r} -> {path}", flush=True)
+    model.set_adapter("default")
     model.eval()
     inner = model.base_model.model  # OpenVLAForActionPrediction with LoRA layers injected
     inner.norm_stats = stats        # de-normalisation statistics of OUR dataset
 
-    STATE.update(proc=proc, inner=inner, unnorm_key=unnorm_key, adapter=str(args.adapter_dir), n=0)
+    STATE.update(proc=proc, inner=inner, model=model, unnorm_key=unnorm_key, adapter=str(args.adapter_dir), n=0,
+                 routes=routes, active="default", bf16=args.bf16)
     if args.llm:
         try:     # the policy must still serve if the language model cannot load
             from llm_frontend import LlamaFrontEnd
