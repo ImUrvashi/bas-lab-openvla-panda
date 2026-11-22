@@ -9,6 +9,7 @@
 
 class ABASWorkcellActor;
 class APandaRobotActor;
+class SWidget;
 
 /** Observation/HTTP bridge: one-shot test, or a closed loop that runs whole episodes. */
 UCLASS(Blueprintable)
@@ -19,6 +20,7 @@ class BASPANDA_API ABASPolicyBridgeActor : public AActor
 public:
     ABASPolicyBridgeActor();
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     virtual void Tick(float DeltaSeconds) override;
 
     UPROPERTY(EditAnywhere, Category = "BAS Policy Test")
@@ -79,7 +81,30 @@ public:
     UFUNCTION(BlueprintCallable, Category = "BAS Policy Loop")
     void StopClosedLoop(const FString& Reason);
 
+    /** Play (not Simulate): on-screen box; a typed request is matched to one of the five tasks and run once. */
+    UPROPERTY(EditAnywhere, Category = "BAS Ask")
+    bool bShowCommandBox = true;
+
+    /** Gateway that forwards to OpenVLA (policy_ik_gateway.py --upstream-url ...). */
+    UPROPERTY(EditAnywhere, Category = "BAS Ask")
+    FString ModelUrl = TEXT("http://127.0.0.1:8000/act");
+
+    /** Gateway running the scripted experts (policy_ik_gateway.py --policy expert --port 8002). */
+    UPROPERTY(EditAnywhere, Category = "BAS Ask")
+    FString ScriptedUrl = TEXT("http://127.0.0.1:8002/act");
+
+    UPROPERTY(EditAnywhere, Category = "BAS Ask")
+    bool bUseModel = true;
+
+    /** Keyword match of a free-text request to a task; false if nothing matches. */
+    static bool MatchTask(const FString& Request, EBASTask& OutTask);
+
+    UFUNCTION(BlueprintCallable, Category = "BAS Ask")
+    void RunRequest(const FString& Request);
+
 private:
+    void BuildCommandBox();
+    FString AskStatusText() const;
     bool SendObservation();
     void HandleResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded);
     void StartEpisode();
@@ -103,4 +128,6 @@ private:
     double LatencySum = 0.0;
     int32 TotalRequests = 0;
     FString LastPhase;
+    FString AskStatus;
+    TSharedPtr<SWidget> CommandBox;
 };

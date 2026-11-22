@@ -4,12 +4,20 @@
 #include "BASWorkcellActor.h"
 #include "PandaRobotActor.h"
 #include "Dom/JsonObject.h"
+#include "Engine/GameViewportClient.h"
+#include "GameFramework/PlayerController.h"
 #include "HttpModule.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/Base64.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/SBoxPanel.h"
+#include "Widgets/Text/STextBlock.h"
 
 namespace
 {
@@ -42,6 +50,176 @@ void ABASPolicyBridgeActor::BeginPlay()
     else if (bSendOnBeginPlay)
     {
         SendTestObservation();
+    }
+    else if (bShowCommandBox)
+    {
+        BuildCommandBox();
+    }
+}
+
+void ABASPolicyBridgeActor::EndPlay(const EEndPlayReason::Type Reason)
+{
+    UGameViewportClient* Viewport = GetWorld() ? GetWorld()->GetGameViewport() : nullptr;
+    if (CommandBox.IsValid() && Viewport)
+    {
+        Viewport->RemoveViewportWidgetContent(CommandBox.ToSharedRef());
+    }
+    CommandBox.Reset();
+    Super::EndPlay(Reason);
+}
+
+bool ABASPolicyBridgeActor::MatchTask(const FString& Request, EBASTask& OutTask)
+{
+    const FString Text = Request.ToLower();
+    auto Has = [&Text](std::initializer_list<const TCHAR*> Words)
+    {
+        for (const TCHAR* Word : Words)
+        {
+            if (Text.Contains(Word))
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    // Most specific objects first: "close the lid" is task 5, "close the drawer" task 2.
+    if (Has({TEXT("vial"), TEXT("container"), TEXT("lid"), TEXT("seal")})) { OutTask = EBASTask::SealContainer; return true; }
+    if (Has({TEXT("drawer"), TEXT("tool"), TEXT("stow")})) { OutTask = EBASTask::StowInDrawer; return true; }
+    if (Has({TEXT("valve"), TEXT("coolant")})) { OutTask = EBASTask::CloseValve; return true; }
+    if (Has({TEXT("filter"), TEXT("cartridge"), TEXT("scrubber")})) { OutTask = EBASTask::InsertFilter; return true; }
+    if (Has({TEXT("cube"), TEXT("marker"), TEXT("pad")})) { OutTask = EBASTask::CubeToPad; return true; }
+    return false;
+}
+
+void ABASPolicyBridgeActor::RunRequest(const FString& Request)
+{
+    if (bLoopActive)
+    {
+        StopClosedLoop(TEXT("Stopped"));
+        AskStatus = TEXT("Stopped. Type the next request.");
+        return;
+    }
+    EBASTask NewTask;
+    if (!MatchTask(Request, NewTask))
+    {
+        AskStatus = TEXT("Not understood. Try: place the red cube on the marker / stow the tool in the drawer / "
+                         "close the coolant valve / insert the filter / put the vial in the container");
+        return;
+    }
+    Task = NewTask;
+    NumEpisodes = 1;
+    bUseTaskInstruction = true;
+    PolicyUrl = bUseModel ? ModelUrl : ScriptedUrl;
+    StartClosedLoop();
+    if (Workcell)
+    {
+        AskStatus = FString::Printf(TEXT("Task %d: %s"), static_cast<int32>(Task) + 1, *Workcell->GetTaskInstruction());
+    }
+}
+
+FString ABASPolicyBridgeActor::AskStatusText() const
+{
+    const TCHAR* Mode = bUseModel ? TEXT("OpenVLA") : TEXT("scripted");
+    if (bLoopActive)
+    {
+        return FString::Printf(TEXT("%s   [%s, step %d/%d]"), *AskStatus, Mode, Step, MaxSteps);
+    }
+    if (AskStatus.IsEmpty() || AskStatus.StartsWith(TEXT("Not understood")) || AskStatus.StartsWith(TEXT("Stopped")))
+    {
+        return AskStatus.IsEmpty() ? FString::Printf(TEXT("Ready (%s). Type a request and press Enter."), Mode) : AskStatus;
+    }
+    const bool bDone = LoopStatus.StartsWith(TEXT("Done: 1/1"));
+    return FString::Printf(TEXT("%s   ->  %s after %d steps"), *AskStatus,
+        bDone ? TEXT("DONE") : (LoopStatus.StartsWith(TEXT("Done")) ? TEXT("not finished") : *LoopStatus), Step);
+}
+
+void ABASPolicyBridgeActor::BuildCommandBox()
+{
+    UWorld* World = GetWorld();
+    UGameViewportClient* Viewport = World ? World->GetGameViewport() : nullptr;
+    if (!Viewport || !FindActors())
+    {
+        return;     // Simulate has no game viewport; the box is for Play
+    }
+    TWeakObjectPtr<ABASPolicyBridgeActor> Self(this);
+    TSharedPtr<SEditableTextBox> Input;
+    TSharedRef<SWidget> Box =
+        SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Bottom).Padding(FMargin(0, 0, 0, 40))
+        [
+            SNew(SBorder).Padding(12.0f).BorderBackgroundColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.7f))
+            [
+                SNew(SVerticalBox)
+                + SVerticalBox::Slot().AutoHeight()
+                [
+                    SNew(SHorizontalBox)
+                    + SHorizontalBox::Slot().FillWidth(1.0f).Padding(0, 0, 8, 0)
+                    [
+                        SAssignNew(Input, SEditableTextBox)
+                        .MinDesiredWidth(560.0f)
+                        .HintText(FText::FromString(TEXT("Tell the robot what to do, e.g. close the coolant valve")))
+                        .OnTextCommitted_Lambda([Self](const FText& Text, ETextCommit::Type How)
+                        {
+                            if (How == ETextCommit::OnEnter && Self.IsValid())
+                            {
+                                Self->RunRequest(Text.ToString());
+                            }
+                        })
+                    ]
+                    + SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 8, 0)
+                    [
+                        SNew(SButton)
+                        .Text_Lambda([Self]()
+                        {
+                            return FText::FromString(Self.IsValid() && Self->bLoopActive ? TEXT("Stop") : TEXT("Run"));
+                        })
+                        .OnClicked_Lambda([Self, Weak = TWeakPtr<SEditableTextBox>(Input)]()
+                        {
+                            if (Self.IsValid() && Weak.IsValid())
+                            {
+                                Self->RunRequest(Weak.Pin()->GetText().ToString());
+                            }
+                            return FReply::Handled();
+                        })
+                    ]
+                    + SHorizontalBox::Slot().AutoWidth()
+                    [
+                        SNew(SButton)
+                        .Text_Lambda([Self]()
+                        {
+                            return FText::FromString(Self.IsValid() && Self->bUseModel ? TEXT("Mode: OpenVLA") : TEXT("Mode: Scripted"));
+                        })
+                        .OnClicked_Lambda([Self]()
+                        {
+                            if (Self.IsValid() && !Self->bLoopActive)
+                            {
+                                Self->bUseModel = !Self->bUseModel;
+                            }
+                            return FReply::Handled();
+                        })
+                    ]
+                ]
+                + SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+                [
+                    SNew(STextBlock)
+                    .ColorAndOpacity(FLinearColor::White)
+                    .Text_Lambda([Self]() { return FText::FromString(Self.IsValid() ? Self->AskStatusText() : FString()); })
+                ]
+            ]
+        ];
+    CommandBox = Box;
+    Viewport->AddViewportWidgetContent(Box, 10);
+
+    if (APlayerController* Player = World->GetFirstPlayerController())
+    {
+        // Watch the bench through the policy camera; mouse free for the box.
+        if (AActor* Camera = UGameplayStatics::GetActorOfClass(this, ABASPolicyCameraActor::StaticClass()))
+        {
+            Player->SetViewTarget(Camera);
+        }
+        Player->SetShowMouseCursor(true);
+        FInputModeGameAndUI Mode;
+        Mode.SetWidgetToFocus(Input);
+        Player->SetInputMode(Mode);
     }
 }
 

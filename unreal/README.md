@@ -96,3 +96,15 @@ Homes (MuJoCo metres): loose items in a row at x 0.55 in front of the arm (cube 
 on the bridge, each episode shifts every prop by up to `LayoutJitterM` (1 cm) around its home. The bridge sends the task's instruction (turn off
 **Use Task Instruction** to send its own), plus `task`, `cube_pos` (active object), `target_pos` and a `state` object
 (object/target/handle positions, drawer_open, valve_deg, lid_deg, tool_stowed, vial_stowed, seated, latched). Expert recording works for all five tasks (`multitask_expert.py` for tasks 2-5).
+
+## Asking the robot (Play)
+
+With Run Closed Loop on Begin Play off, press **Play** (not Simulate): a box at the bottom of the view takes a
+request such as "close the coolant valve". Keywords pick the task (vial/container/lid, drawer/tool, valve,
+filter/cartridge/scrubber, cube/marker); the trained sentence for that task is sent, and the task runs once.
+**Mode** switches between two gateways:
+
+    # OpenVLA (tunnel to the model server on 8001)
+    .venv/bin/python policy_ik_gateway.py --upstream-url http://127.0.0.1:8001/act            # port 8000
+    # scripted experts
+    .venv/bin/python policy_ik_gateway.py --policy expert --port 8002
