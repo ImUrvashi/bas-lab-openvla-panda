@@ -126,10 +126,14 @@ def main():
 
     STATE.update(proc=proc, inner=inner, unnorm_key=unnorm_key, adapter=str(args.adapter_dir), n=0)
     if args.llm:
-        from llm_frontend import LlamaFrontEnd
-        print(f"loading front end {args.llm} ...", flush=True)
-        STATE["llm"] = LlamaFrontEnd(args.llm)
-        print(f"front end: {STATE['llm'].interpret('please close the coolant valve')}", flush=True)
+        try:     # the policy must still serve if the language model cannot load
+            from llm_frontend import LlamaFrontEnd
+            print(f"loading front end {args.llm} ...", flush=True)
+            STATE["llm"] = LlamaFrontEnd(args.llm)
+            print(f"front end: {STATE['llm'].interpret('please close the coolant valve')}", flush=True)
+        except Exception as e:
+            STATE.pop("llm", None)
+            print(f"front end not loaded: {e!r}", flush=True)
 
     # Warm-up (also proves the whole path works before accepting clients).
     t0 = time.time()
