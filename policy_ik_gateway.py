@@ -136,6 +136,7 @@ def convert_action(kin, joints, opening, action):
 class GatewayHandler(BaseHTTPRequestHandler):
     kin = None
     upstream_url = None
+    llm_url = None
     save_image = None
     policy = "sample"
     expert = None
@@ -155,6 +156,20 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def forward_interpret(self):
+        """Operator text -> the server's language front end (task number, trained sentence, reply)."""
+        if not self.llm_url:
+            return self.send_json(503, {"error": "no --llm-url"})
+        try:
+            body = self.rfile.read(min(int(self.headers.get("Content-Length", "0")), 10000))
+            req = urllib.request.Request(self.llm_url, body, {"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=30) as response:
+                out = json.load(response)
+            print(f"interpret -> task {out.get('task')}: {out.get('reply')}", flush=True)
+            self.send_json(200, out)
+        except (ValueError, urllib.error.URLError, OSError) as exc:
+            self.send_json(502, {"error": str(exc)})
+
     def do_GET(self):
         if self.path in ("/", "/health"):
             return self.send_json(200, {"ok": True, "mode": "upstream" if self.upstream_url else self.policy,
@@ -162,6 +177,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "not found"})
 
     def do_POST(self):
+        if self.path == "/interpret":
+            return self.forward_interpret()
         if self.path != "/act":
             return self.send_json(404, {"error": "not found"})
         try:
@@ -211,10 +228,13 @@ def main():
     parser.add_argument("--upstream-url", help="OpenVLA POST /act endpoint (overrides --policy)")
     parser.add_argument("--record", help="expert mode: save DART demonstrations to this folder")
     parser.add_argument("--seed", type=int, default=1, help="recording noise seed (one manifest per seed)")
+    parser.add_argument("--llm-url", help="language front end POST /interpret (default: next to --upstream-url)")
     parser.add_argument("--save-image", help="overwrite this PNG with every observation (camera check)")
     args = parser.parse_args()
     GatewayHandler.kin = PandaKinematics()
     GatewayHandler.upstream_url = args.upstream_url
+    GatewayHandler.llm_url = args.llm_url or (
+        args.upstream_url.rsplit("/", 1)[0] + "/interpret" if args.upstream_url else None)
     GatewayHandler.policy = args.policy
     GatewayHandler.save_image = args.save_image
     if args.record:
