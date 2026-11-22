@@ -166,7 +166,9 @@ def trace_step(handler, request, joints, opening, action):
     grasp = hand + R[:, 2] * 0.094
     st = request.get("state", {})
     obj = np.array([st.get(k, np.nan) for k in ("object_x", "object_y", "object_z")])
-    if "handle_x" in st and st.get("held_object", 0) < 0.5 and request.get("task") in (2, 5):
+    task, stowed = request.get("task"), st.get("tool_stowed", 0) + st.get("vial_stowed", 0) > 0.5
+    use_handle = (task == 5 and stowed) or (task == 2 and (stowed or st.get("drawer_open", 0) < 0.10))
+    if "handle_x" in st and st.get("held_object", 0) < 0.5 and use_handle:   # knob / lid tab stage
         obj = np.array([st["handle_x"], st["handle_y"], st["handle_z"]])
     d = (grasp - obj) * 100
     new = not handler.trace.exists()
