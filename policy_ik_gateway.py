@@ -141,8 +141,27 @@ def png_b64(rgb):
     return base64.b64encode(buf.getvalue()).decode()
 
 
+def gate_gripper(handler, action, opening, step, still_m=0.0015, need=2):
+    """Model closes only after asking to close while nearly still on `need` steps in a row (the expert stops
+    before grasping); an early close while still descending is turned back into 'open'."""
+    if step == 0:
+        handler.gate_count = 0
+    action = list(action)
+    if opening > 0.5 and action[6] < 0.5:
+        still = math.hypot(*action[:3]) < still_m
+        handler.gate_count = handler.gate_count + 1 if still else 0
+        if handler.gate_count < need:
+            action[6] = 1.0
+            return action, "GATED"
+    else:
+        handler.gate_count = 0
+    return action, ""
+
+
 class GatewayHandler(BaseHTTPRequestHandler):
     kin = None
+    grip_gate = False
+    gate_count = 0
     upstream_url = None
     llm_url = None
     save_image = None
@@ -212,6 +231,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 )
                 with urllib.request.urlopen(upstream_request, timeout=30) as response:
                     action = json.load(response)["action"]
+                if self.grip_gate:
+                    action, phase = gate_gripper(type(self), action, opening, request.get("step", 0))
             with self.lock:
                 if not self.upstream_url and self.policy == "expert":
                     action, phase = expert_action(type(self), request, joints, opening, rgb)
@@ -238,10 +259,13 @@ def main():
     parser.add_argument("--record", help="expert mode: save DART demonstrations to this folder")
     parser.add_argument("--seed", type=int, default=1, help="recording noise seed (one manifest per seed)")
     parser.add_argument("--llm-url", help="language front end POST /interpret (default: next to --upstream-url)")
+    parser.add_argument("--grip-gate", action="store_true",
+                        help="upstream mode: accept a close only when the model also asks to stand still")
     parser.add_argument("--save-image", help="overwrite this PNG with every observation (camera check)")
     args = parser.parse_args()
     GatewayHandler.kin = PandaKinematics()
     GatewayHandler.upstream_url = args.upstream_url
+    GatewayHandler.grip_gate = args.grip_gate
     GatewayHandler.llm_url = args.llm_url or (
         args.upstream_url.rsplit("/", 1)[0] + "/interpret" if args.upstream_url else None)
     GatewayHandler.policy = args.policy
