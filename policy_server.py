@@ -6,6 +6,7 @@ simulator runs on another machine, forward port 8000 to it (e.g. an SSH local po
 
     POST /act   {"instruction": str, "image_b64": base64(uint8 HxWx3), "shape": [224,224,3]}
         -> {"action": [dx,dy,dz,droll,dpitch,dyaw,gripper], "latency_s": float}
+    POST /interpret {"text": str}  (with --llm) -> {"task": 0-5, "instruction": str, "reply": str}
     GET  /health
 
 Returned actions are already de-normalised (metres / radians / gripper 0..1) using the run's
@@ -67,6 +68,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if self.path == "/interpret":
+            return self._interpret()
         if self.path != "/act":
             return self._send(404, {"error": "not found"})
         try:
@@ -81,6 +84,19 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # report to the client instead of killing the server
             self._send(500, {"error": repr(e)})
 
+    def _interpret(self):
+        if "llm" not in STATE:
+            return self._send(503, {"error": "no language front end (start with --llm)"})
+        try:
+            req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            t0 = time.time()
+            with LOCK:
+                out = STATE["llm"].interpret(str(req["text"]))
+            print(f"interpret {req['text']!r} -> {out}", flush=True)
+            self._send(200, {**out, "latency_s": round(time.time() - t0, 3)})
+        except Exception as e:
+            self._send(500, {"error": repr(e)})
+
     def log_message(self, fmt, *args):  # quiet
         pass
 
@@ -91,6 +107,7 @@ def main():
     ap.add_argument("--adapter_dir", type=Path, required=True, help=".../lora_adapter (run dir holds dataset_statistics.json)")
     ap.add_argument("--stats", type=Path, default=None, help="dataset_statistics.json (default: next to adapter_dir)")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--llm", default=None, help="also load this chat model as the request front end (/interpret)")
     args = ap.parse_args()
 
     stats_path = args.stats or (args.adapter_dir.parent / "dataset_statistics.json")
@@ -108,6 +125,11 @@ def main():
     inner.norm_stats = stats        # de-normalisation statistics of OUR dataset
 
     STATE.update(proc=proc, inner=inner, unnorm_key=unnorm_key, adapter=str(args.adapter_dir), n=0)
+    if args.llm:
+        from llm_frontend import LlamaFrontEnd
+        print(f"loading front end {args.llm} ...", flush=True)
+        STATE["llm"] = LlamaFrontEnd(args.llm)
+        print(f"front end: {STATE['llm'].interpret('please close the coolant valve')}", flush=True)
 
     # Warm-up (also proves the whole path works before accepting clients).
     t0 = time.time()
