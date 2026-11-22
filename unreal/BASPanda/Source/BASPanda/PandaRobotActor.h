@@ -50,6 +50,12 @@ public:
 
     bool IsCommandActive() const { return bCommandActive; }
 
+    /** Where the current move ends (the present joints when no move is active). */
+    const TArray<float>& GetCommandTargetsRad() const
+    {
+        return bCommandActive && CommandTargetsRad.Num() == ArmJointsRad.Num() ? CommandTargetsRad : ArmJointsRad;
+    }
+
     /** Measured gripper openness, 0 closed .. 1 open (as MuJoCo's grip_obs). */
     float GetGripperOpenness() const { return FingerOpeningCm / 4.0f; }
 

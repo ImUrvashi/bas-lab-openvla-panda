@@ -385,8 +385,8 @@ void ABASPolicyBridgeActor::Tick(float DeltaSeconds)
         bReturningHome = Off > 0.005f && Panda->CommandJointTargets(Home, 1.0f, 0.25f);
         return;
     }
-    // Next step only once the previous action has been fully executed and answered.
-    if (!bLoopActive || bRequestInFlight || !Panda || Panda->IsCommandActive())
+    // Next step once the previous action is answered; stop-go mode also waits until it has been executed.
+    if (!bLoopActive || bRequestInFlight || !Panda || (!bSmoothMotion && Panda->IsCommandActive()))
     {
         return;
     }
@@ -440,7 +440,8 @@ bool ABASPolicyBridgeActor::SendObservation()
     if (Panda && Panda->ArmJointsRad.Num() == 7)
     {
         TArray<TSharedPtr<FJsonValue>> Joints;
-        for (const float Angle : Panda->ArmJointsRad)
+        // smooth mode: the arm is still moving, so actions are relative to where this move ends
+        for (const float Angle : bSmoothMotion ? Panda->GetCommandTargetsRad() : Panda->ArmJointsRad)
         {
             Joints.Add(MakeShared<FJsonValueNumber>(Angle));
         }
@@ -494,7 +495,9 @@ bool ABASPolicyBridgeActor::SendObservation()
 void ABASPolicyBridgeActor::HandleResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded)
 {
     bRequestInFlight = false;
-    LatencySum += FPlatformTime::Seconds() - RequestStartTime;
+    const double RoundTrip = FPlatformTime::Seconds() - RequestStartTime;
+    LatencySum += RoundTrip;
+    LatencyEma = LatencyEma > 0.0 ? 0.8 * LatencyEma + 0.2 * RoundTrip : RoundTrip;
     ++TotalRequests;
     const bool bLoop = bLoopActive;
     auto Fail = [this, bLoop](const FString& Message)
@@ -548,7 +551,8 @@ void ABASPolicyBridgeActor::HandleResponse(FHttpRequestPtr Request, FHttpRespons
         }
     }
     FindActors();
-    if (!Panda || !Panda->CommandJointTargets(JointTargets, (*Targets)[7]->AsNumber(), bLoop ? StepDurationSec : 0.0f))
+    if (!Panda || !Panda->CommandJointTargets(JointTargets, (*Targets)[7]->AsNumber(),
+        !bLoop ? 0.0f : bSmoothMotion ? FMath::Clamp(static_cast<float>(LatencyEma), StepDurationSec, 2.0f) : StepDurationSec))
     {
         return Fail(TEXT("Panda could not accept joint targets; run Simulate with motion test disabled"));
     }

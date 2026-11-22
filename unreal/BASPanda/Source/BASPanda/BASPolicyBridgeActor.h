@@ -65,6 +65,11 @@ public:
     UPROPERTY(EditAnywhere, Category = "BAS Policy Loop", meta = (ClampMin = "0.02"))
     float StepDurationSec = 0.1f;
 
+    /** On: ask for the next action while the arm is still moving and stretch each move over the measured round trip,
+        so the arm moves continuously instead of stop-go (the camera frame is then one step behind). */
+    UPROPERTY(EditAnywhere, Category = "BAS Policy Loop")
+    bool bSmoothMotion = true;
+
     /** On: every episode shifts each prop around its home spot (workcell Layout Jitter M). */
     UPROPERTY(EditAnywhere, Category = "BAS Policy Loop")
     bool bRandomizeLayout = false;
@@ -136,6 +141,7 @@ private:
     int32 Successes = 0;
     double RequestStartTime = 0.0;
     double LatencySum = 0.0;
+    double LatencyEma = 0.0;
     int32 TotalRequests = 0;
     FString LastPhase;
     FString AskStatus;
