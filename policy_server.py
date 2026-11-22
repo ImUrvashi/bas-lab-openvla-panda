@@ -4,7 +4,7 @@ policy_server.py -- serve a fine-tuned OpenVLA (4-bit base + LoRA adapter) over 
 Runs on the machine with the GPU (copy next to the OpenVLA repo). Binds 127.0.0.1 only; if the
 simulator runs on another machine, forward port 8000 to it (e.g. an SSH local port-forward).
 
-    POST /act   {"instruction": str, "image_b64": base64(uint8 HxWx3), "shape": [224,224,3]}
+    POST /act   {"instruction": str, "image_b64": base64(uint8 HxWx3) or "image_png_b64": base64(PNG), "shape": [224,224,3]}
         -> {"action": [dx,dy,dz,droll,dpitch,dyaw,gripper], "latency_s": float}
     POST /interpret {"text": str}  (with --llm) -> {"task": 0-5, "instruction": str, "reply": str}
     GET  /health
@@ -15,6 +15,7 @@ dataset_statistics.json, i.e. exactly what openvla_adapter.decode_action() expec
 
 import argparse
 import base64
+import io
 import json
 import os
 import sys
@@ -75,7 +76,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length", 0))
             req = json.loads(self.rfile.read(n))
-            img = np.frombuffer(base64.b64decode(req["image_b64"]), dtype=np.uint8).reshape(req["shape"])
+            if "image_png_b64" in req:      # lossless PNG from the gateway (smaller over the VPN)
+                img = np.asarray(Image.open(io.BytesIO(base64.b64decode(req["image_png_b64"]))).convert("RGB"))
+            else:
+                img = np.frombuffer(base64.b64decode(req["image_b64"]), dtype=np.uint8).reshape(req["shape"])
             t0 = time.time()
             with LOCK:
                 action = predict(req["instruction"], img)

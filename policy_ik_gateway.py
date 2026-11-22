@@ -13,6 +13,7 @@ Unreal's bridge calls POST /act once per 0.1 s policy step. Where the 7-D action
 import argparse
 import base64
 import binascii
+import io
 import json
 import math
 import threading
@@ -133,6 +134,13 @@ def convert_action(kin, joints, opening, action):
     return action.tolist(), target8.tolist(), residual
 
 
+def png_b64(rgb):
+    """224x224 frame as lossless PNG: about a quarter of the raw bytes over the VPN."""
+    buf = io.BytesIO()
+    Image.fromarray(np.frombuffer(rgb, np.uint8).reshape(224, 224, 3)).save(buf, "PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
 class GatewayHandler(BaseHTTPRequestHandler):
     kin = None
     upstream_url = None
@@ -198,7 +206,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if self.upstream_url:
                 upstream_request = urllib.request.Request(
                     self.upstream_url,
-                    json.dumps({key: request[key] for key in ("instruction", "image_b64", "shape")}).encode(),
+                    json.dumps({"instruction": request["instruction"], "shape": request["shape"],
+                                "image_png_b64": png_b64(rgb)}).encode(),
                     {"Content-Type": "application/json"},
                 )
                 with urllib.request.urlopen(upstream_request, timeout=30) as response:
