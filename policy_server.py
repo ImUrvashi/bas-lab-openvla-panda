@@ -45,6 +45,20 @@ def build_prompt(instruction):
     return f"In: What action should the robot take to {P.format_instruction(instruction)}?\nOut:"
 
 
+def load_adapters(base, args):
+    """Main adapter plus one switchable adapter per --route (LoRA kept separate)."""
+    model = PeftModel.from_pretrained(base, str(args.adapter_dir), adapter_name="default")
+    routes = []
+    for k, r in enumerate(args.route):
+        prefix, path = r.split("=", 1)
+        model.load_adapter(path, adapter_name=f"route{k}")
+        routes.append((prefix.strip().lower(), f"route{k}"))
+        print(f"route {prefix!r} -> {path}", flush=True)
+    model.set_adapter("default")
+    STATE["routes"] = routes
+    return model.eval()
+
+
 def adapter_for(instruction):
     """Name of the LoRA adapter that serves this instruction (first matching --route prefix, else the main one)."""
     text = instruction.strip().lower()
@@ -52,11 +66,15 @@ def adapter_for(instruction):
 
 
 def predict(instruction, image_u8):
-    proc, inner, key = STATE["proc"], STATE["inner"], STATE["unnorm_key"]
+    proc, key = STATE["proc"], STATE["unnorm_key"]
     name = adapter_for(instruction)
-    if name != STATE["active"]:
-        STATE["model"].set_adapter(name)
-        STATE["active"] = name
+    if "merged" in STATE:          # one merged model per adapter
+        inner = STATE["merged"][name]
+    else:
+        inner = STATE["inner"]
+        if name != STATE["active"]:
+            STATE["model"].set_adapter(name)
+            STATE["active"] = name
     inputs = proc(build_prompt(instruction), Image.fromarray(image_u8)).to("cuda:0", dtype=torch.bfloat16)
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
         action = inner.predict_action(**inputs, unnorm_key=key, do_sample=False)
@@ -123,6 +141,8 @@ def main():
     ap.add_argument("--stats", type=Path, default=None, help="dataset_statistics.json (default: next to adapter_dir)")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--bf16", action="store_true", help="bf16 base instead of 4-bit (several times faster, ~16 GB)")
+    ap.add_argument("--merge", action="store_true",
+                    help="with --bf16: merge each adapter into its own copy of the base (no LoRA overhead per step)")
     ap.add_argument("--route", action="append", default=[], metavar="PREFIX=ADAPTER_DIR",
                     help="serve instructions starting with PREFIX with another adapter (same dataset statistics)")
     ap.add_argument("--llm", default=None, help="also load this chat model as the request front end (/interpret)")
@@ -138,20 +158,31 @@ def main():
     base = F.load_vla(args.vla_path, quantize=not args.bf16)
     if not args.bf16:
         base = prepare_model_for_kbit_training(base, use_gradient_checkpointing=False)  # same numerics as training
-    model = PeftModel.from_pretrained(base, str(args.adapter_dir), adapter_name="default")
-    routes = []
-    for k, r in enumerate(args.route):
-        prefix, path = r.split("=", 1)
-        model.load_adapter(path, adapter_name=f"route{k}")
-        routes.append((prefix.strip().lower(), f"route{k}"))
-        print(f"route {prefix!r} -> {path}", flush=True)
-    model.set_adapter("default")
-    model.eval()
-    inner = model.base_model.model  # OpenVLAForActionPrediction with LoRA layers injected
-    inner.norm_stats = stats        # de-normalisation statistics of OUR dataset
-
-    STATE.update(proc=proc, inner=inner, model=model, unnorm_key=unnorm_key, adapter=str(args.adapter_dir), n=0,
-                 routes=routes, active="default", bf16=args.bf16)
+    if args.merge:
+        assert args.bf16, "--merge needs --bf16"
+        import copy
+        adapters = [("default", str(args.adapter_dir))]
+        routes = []
+        for k, r in enumerate(args.route):
+            prefix, path = r.split("=", 1)
+            adapters.append((f"route{k}", path))
+            routes.append((prefix.strip().lower(), f"route{k}"))
+            print(f"route {prefix!r} -> {path}", flush=True)
+        merged = {}
+        for i, (name, path) in enumerate(adapters):
+            copy_ = base if i == len(adapters) - 1 else copy.deepcopy(base)
+            m = PeftModel.from_pretrained(copy_, path).merge_and_unload().eval()
+            m.norm_stats = stats
+            merged[name] = m
+            print(f"merged {name} <- {path}", flush=True)
+        STATE.update(proc=proc, merged=merged, unnorm_key=unnorm_key, adapter=str(args.adapter_dir), n=0,
+                     routes=routes, active="default", bf16=True)
+    else:
+        model = load_adapters(base, args)
+        inner = model.base_model.model  # OpenVLAForActionPrediction with LoRA layers injected
+        inner.norm_stats = stats        # de-normalisation statistics of OUR dataset
+        STATE.update(proc=proc, inner=inner, model=model, unnorm_key=unnorm_key, adapter=str(args.adapter_dir), n=0,
+                     routes=STATE["routes"], active="default", bf16=args.bf16)
     if args.llm:
         try:     # the policy must still serve if the language model cannot load
             from llm_frontend import LlamaFrontEnd
