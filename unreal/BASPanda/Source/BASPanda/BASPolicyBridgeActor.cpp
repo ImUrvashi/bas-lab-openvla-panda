@@ -319,7 +319,8 @@ void ABASPolicyBridgeActor::StartClosedLoop()
         return;
     }
     Workcell->Task = Task;
-    LayoutStream.Initialize(LayoutSeed);
+    // every run draws a new layout (the first one matches the recorded seed)
+    LayoutStream.Initialize(LayoutSeed + 1000 * RunCount++);
     Episode = 0;
     Successes = 0;
     LatencySum = 0.0;

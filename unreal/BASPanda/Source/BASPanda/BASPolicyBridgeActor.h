@@ -136,6 +136,7 @@ private:
     bool bLoopActive = false;
     bool bRequestInFlight = false;
     int32 Episode = 0;
+    int32 RunCount = 0;
     int32 Step = 0;
     int32 SuccessStreak = 0;
     int32 Successes = 0;
