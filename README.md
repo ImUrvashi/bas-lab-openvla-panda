@@ -32,6 +32,7 @@ Tasks 2 and 5 switch sentence on state changes, because the start and end of the
 | Adaptation | LoRA r32 / α16 on all linear layers: 110.8 M trainable (1.45 %). Output head and embeddings frozen. | none: system prompt + few-shot examples |
 | Output | 7 action tokens (256 bins each) → un-normalised hand delta | task 0-5 + a one-line reply |
 | Served as | bf16, unmerged LoRA; task 1 routed to its own adapter | 4-bit |
+| Weights | `weights/bench_sub_step3500` (tasks 2-5), `weights/bench_9k_step7000` (task 1) | Hugging Face (gated) |
 
 ## Data and training
 
@@ -110,6 +111,28 @@ In Unreal, open `unreal/BASPanda/BASPanda.uproject`, press **Play** and type int
 - **Randomize Layout:** objects shift up to ±1 cm per run, the trained range.
 
 Add `--trace doc/trace.csv` to the gateway to log every step.
+
+## Trained weights (Git LFS)
+
+Run `git lfs install` before cloning, or `git lfs pull` in an existing clone. Each adapter is 443 MB and is used with
+the base model `openvla/openvla-7b` from Hugging Face.
+
+| Folder | Serves |
+|---|---|
+| `weights/bench_sub_step3500/` | tasks 2-5 (sub-step sentences) |
+| `weights/bench_9k_step7000/` | task 1 |
+| `weights/side_v12_step2500/` | original MuJoCo lab model |
+
+To serve them on any CUDA GPU with about 24 GB free, from the OpenVLA repo with these scripts in `panda_tests/`:
+
+```bash
+python panda_tests/policy_server.py --bf16 --port 8001 \
+    --adapter_dir weights/bench_sub_step3500/lora_adapter \
+    --route "pick up the red cube=weights/bench_9k_step7000/lora_adapter" \
+    --llm meta-llama/Meta-Llama-3-8B-Instruct
+```
+
+Llama 3 is gated. Request access on Hugging Face and log in first.
 
 ## Repository
 
