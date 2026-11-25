@@ -17,3 +17,4 @@ unreal/**/*.xcworkspace/
 unreal/exported/
 .DS_Store
 brag-output/
+server/login.env

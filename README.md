@@ -91,7 +91,8 @@ typo 4/5, ambiguous 2/4. Mean latency 1.1 s.
 
 ## Run the demo
 
-Four terminals, from the repository root (Python env in `.venv`):
+Four terminals, from the repository root (Python env in `.venv`). First put your cluster login in
+`server/login.env` (not committed): `MASTER=<user>@<master>` and `COMPUTE=<user>@compute`.
 
 ```bash
 # 1. model server on the GPU (OpenVLA + Llama); prints SERVER READY
